@@ -1,0 +1,54 @@
+{
+  "name": "activity-monitor",
+  "version": "0.1.0",
+  "description": "A pane beside the chat with a live feed of Claude's tool calls and a context meter that shows memory use and whether the next command reloads context",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "meterColor": {
+      "type": "string",
+      "title": "Meter bar color",
+      "description": "Color of the filled part of the context meter (a name like cyan, green, magenta, or a #hex value)",
+      "default": "cyan"
+    },
+    "barWidth": {
+      "type": "number",
+      "title": "Meter bar width",
+      "description": "Width of the meter bar in characters (10-60)",
+      "default": 30
+    },
+    "contextWindow": {
+      "type": "number",
+      "title": "Context window (tokens)",
+      "description": "Size of the model's context window, used for the meter",
+      "default": 200000
+    },
+    "compactAtPercent": {
+      "type": "number",
+      "title": "Compact warning (%)",
+      "description": "Warn that a compaction is likely once the context passes this percent",
+      "default": 90
+    },
+    "cacheTtl": {
+      "type": "string",
+      "title": "Default cache lifetime",
+      "description": "Prompt-cache lifetime assumed until a response reports its own",
+      "default": "5m",
+      "options": [
+        "5m",
+        "1h"
+      ]
+    },
+    "outgoingColor": {
+      "type": "string",
+      "title": "Outgoing token color",
+      "description": "Color of the tokens sent to the model (\u2191, top line of each call)",
+      "default": "magenta"
+    },
+    "incomingColor": {
+      "type": "string",
+      "title": "Incoming token color",
+      "description": "Color of the tokens the model wrote back (\u2193, bottom line of each call)",
+      "default": "cyan"
+    }
+  }
+}
