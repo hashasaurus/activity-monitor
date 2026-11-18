@@ -17,10 +17,12 @@ const now = atom({ plugin: 'activity-monitor', key: 'now' } as const, 0, { shape
 const TTL_MS = { '5m': 300_000, '1h': 3_600_000 }
 const scroll = atom({ plugin: 'activity-monitor', key: 'scroll' } as const, 0, { shape: 'scroll-1' })
 const warming = atom({ plugin: 'activity-monitor', key: 'warming' } as const, false, { shape: 'warming-1' })
+const compacting = atom({ plugin: 'activity-monitor', key: 'compacting' } as const, false, { shape: 'compacting-1' })
 const PAGE = 3
 const TICK_MS = 5000
 // Widest token line: "↓999k÷9" is 7 columns.
-const TOK_W = 7
+// Widest model line: "🧠 $12.34" is 9 columns (an emoji takes two).
+const TOK_W = 9
 const DUR_W = 6 // "999ms", "12.3s"
 const CLOCK_W = 8 // hh:mm:ss
 
@@ -28,6 +30,8 @@ const CLOCK_W = 8 // hh:mm:ss
 // call waiting to run is matched by loop and tool name, first come first served.
 type Pending = { loop: string; tool: string; tokens: Tokens }
 let pending: Pending[] = []
+// The model each loop ('main' or an agent id) last used, for calls with no matched response.
+const lastModel = new Map<string, string>()
 
 const KEYS = ['file_path', 'command', 'pattern', 'url', 'query', 'skill', 'description', 'prompt', 'path', 'action']
 
@@ -75,6 +79,63 @@ function modelLabel(id: string): string {
   return id
 }
 
+// Anthropic API list prices in $ per million tokens (as of 2026-11): input, output, cache read.
+// Cache writes cost 1.25x input for the 5-minute TTL and 2x for the 1-hour TTL.
+// Haiku 5.5 prompts over 100K tokens bill at the higher `big` rates.
+type Price = { in: number; out: number; read: number; big?: { in: number; out: number; read: number } }
+const PRICES: Array<[RegExp, Price]> = [
+  [/fable-5-2|mythos-5-2/, { in: 8, out: 40, read: 0.2 }],
+  [/fable-5-1|mythos-5-1|fable-5(?!-)/, { in: 10, out: 50, read: 0.25 }],
+  [/opus-5-5/, { in: 4, out: 20, read: 0.2 }],
+  [/opus-(5|4-[5-8])(?!-?\d)/, { in: 5, out: 25, read: 0.5 }],
+  [/sonnet-5-5/, { in: 2, out: 10, read: 0.1 }],
+  [/sonnet-5(?!-)/, { in: 2, out: 10, read: 0.2 }],
+  [/sonnet-4-[56]/, { in: 3, out: 15, read: 0.3 }],
+  [/haiku-5-5/, { in: 0.1, out: 0.5, read: 0.01, big: { in: 0.5, out: 2.5, read: 0.05 } }],
+  [/haiku-4-5/, { in: 1, out: 5, read: 0.1 }],
+]
+
+type Usage = {
+  model?: string
+  input_tokens: number
+  output_tokens: number
+  cache_read_input_tokens: number
+  cache_creation_input_tokens: number
+  ephemeral_5m_input_tokens?: number
+  ephemeral_1h_input_tokens?: number
+}
+
+/**
+ * What one response cost in dollars at API list prices, and what its cache reads saved
+ * against sending those tokens uncached; undefined for an unknown model.
+ */
+function costOf(u: Usage, sent: number): { cost: number; saved: number } | undefined {
+  const hit = u.model ? PRICES.find(([re]) => re.test(u.model!)) : undefined
+  if (!hit) return undefined
+  const p0 = hit[1]
+  const p = p0.big && sent > 100_000 ? p0.big : p0
+  const long = u.ephemeral_1h_input_tokens ?? 0
+  const short = u.ephemeral_5m_input_tokens ?? Math.max(0, u.cache_creation_input_tokens - long)
+  const cost =
+    (u.input_tokens * p.in +
+      u.output_tokens * p.out +
+      u.cache_read_input_tokens * p.read +
+      short * p.in * 1.25 +
+      long * p.in * 2) /
+    1_000_000
+  const saved = (u.cache_read_input_tokens * (p.in - p.read)) / 1_000_000
+  return { cost, saved }
+}
+
+function money(d: number): string {
+  if (d > 0 && d < 0.01) return '<1¢'
+  return d >= 100 ? `$${Math.round(d)}` : `$${d.toFixed(2)}`
+}
+
+function familyOf(id: string): string | undefined {
+  return id.match(/opus|sonnet|haiku|fable/)?.[0]
+}
+
 function n(v: number): string {
   if (v < 1000) return String(v)
   if (v < 1_000_000) return `${(v / 1000).toFixed(v < 10_000 ? 1 : 0)}k`
@@ -111,6 +172,17 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // After any compaction of the main conversation (/compact, auto, or the bar's
+  // click), drop the meter to the new size instead of waiting for the next request.
+  on('session.compact', async ($, e, next) => {
+    const r = await next(e)
+    if (!e.agentId && e.trigger !== 'precompute' && r.skip === undefined) {
+      const after = (r as { tokensAfter?: number }).tokensAfter ?? 0
+      await update($, ctx, cur => ({ ...cur, tokens: after })).catch(() => {})
+    }
+    return r
+  })
+
   on('turn.step', async function* ($, e, next) {
     const sentAt = await $.clock.now()
     const r = yield* next(e)
@@ -134,14 +206,19 @@ export const register: Register = (on, options) => {
           ttlMs: TTL_MS[long ? '1h' : short ? '5m' : c.lastAt ? (c.ttlMs >= TTL_MS['1h'] ? '1h' : '5m') : dflt],
         }))
       }
+      const loop = e.agentId ?? 'main'
+      if (u.model) lastModel.set(loop, u.model)
       const count = r.toolUses.length
+      const price = costOf({ ...u, model: u.model ?? lastModel.get(loop) }, sent)
       if (count > 0) {
-        const loop = e.agentId ?? 'main'
         const tokens: Tokens = {
+          model: u.model ?? lastModel.get(loop),
           in: Math.round(sent / count),
           out: Math.round(u.output_tokens / count),
           cached: Math.round(u.cache_read_input_tokens / count),
           shared: count,
+          cost: price && price.cost / count,
+          saved: price && price.saved / count,
         }
         pending = [...pending, ...r.toolUses.map(t => ({ loop, tool: t.name, tokens }))].slice(-50)
       }
@@ -156,7 +233,8 @@ export const register: Register = (on, options) => {
     const tokens = at >= 0 ? pending[at]?.tokens : undefined
     if (at >= 0) pending = pending.filter((_, i) => i !== at)
     const id = e.tool_use_id ?? `${e.tool}-${startedAt}`
-    const entry: Activity = { id, tool: e.tool, target: targetOf(e), startedAt, status: 'running', tokens }
+    const model = tokens?.model ?? lastModel.get(loop)
+    const entry: Activity = { id, tool: e.tool, target: targetOf(e), startedAt, status: 'running', tokens, model }
     await update($, calls, list => [...list, entry].slice(-KEEP))
     let status: Activity['status'] = 'error'
     try {
@@ -175,6 +253,7 @@ export const register: Register = (on, options) => {
     const tot = await read($, totals)
     const off0 = await read($, scroll)
     const isWarming = await read($, warming)
+    const isCompacting = await read($, compacting)
     const mine = await read($, ctx)
     // Prefer the engine's own reading of the main loop; fall back to what turn.step saw.
     let eng: Awaited<ReturnType<typeof $.agent.list>>[number] | undefined
@@ -212,6 +291,17 @@ export const register: Register = (on, options) => {
     const sepColor = opt(options.separatorColor, 'gray')
     const modelColor = opt(options.modelColor, 'green')
     const modelName = mine.model ?? eng?.model ?? ''
+    const icons: Record<string, string> = {
+      opus: opt(options.opusIcon, '🧠'),
+      sonnet: opt(options.sonnetIcon, '🎵'),
+      haiku: opt(options.haikuIcon, '🍃'),
+      fable: opt(options.fableIcon, '🦉'),
+    }
+    const otherIcon = opt(options.otherModelIcon, '❔')
+    const costColor = opt(options.costColor, 'green')
+    const savedIcon = opt(options.savingsIcon, '💵')
+    const savedColor = opt(options.savingsColor, 'gray')
+    const modelIcon = (id: string) => icons[familyOf(id) ?? ''] ?? otherIcon
     const pct = Math.min(1, c.tokens / win)
     const filled = Math.round(pct * width)
     const started = c.lastAt > 0
@@ -219,6 +309,7 @@ export const register: Register = (on, options) => {
     const leftMs = c.ttlMs - idleMs
     const expired = started && leftMs <= 0
     const compact = pct >= warnAt
+    const heavy = pct >= warnPct || compact // yellow or red: the bar becomes a /compact button
     const barColor = compact ? criticalColor : pct >= warnPct ? warnColor : color
     const ttlLabel = c.ttlMs >= TTL_MS['1h'] ? '1h' : '5m'
     const off = Math.min(off0, Math.max(0, list.length - 1))
@@ -257,6 +348,21 @@ export const register: Register = (on, options) => {
         $.ui.toast(`Warm-up failed: ${err instanceof Error ? err.message : String(err)}`)
       } finally {
         await update($, warming, () => false)
+      }
+    }
+    // The bar's click once it turns the warning or critical color: the same
+    // compaction /compact runs. The engine refuses it while a turn is running.
+    const runCompact = async () => {
+      if (await read($, compacting)) return
+      await update($, compacting, () => true)
+      try {
+        const r = await $.session.compact()
+        const after = (r as { tokensAfter?: number }).tokensAfter
+        $.ui.toast(r.skip ? `Compact skipped: ${r.skip}` : `Compacted${after !== undefined ? ` to ~${n(after)}` : ''}`)
+      } catch (err) {
+        $.ui.toast(`Couldn't compact: ${err instanceof Error ? err.message : String(err)} · try again when Claude is idle`)
+      } finally {
+        await update($, compacting, () => false)
       }
     }
     const clear = () => {
@@ -300,6 +406,18 @@ export const register: Register = (on, options) => {
                 <Text color={inColor} wrap="truncate-end">
                   {c.tokens ? `↓${n(c.tokens.out)}${c.tokens.shared > 1 ? `÷${c.tokens.shared}` : ''}` : ''}
                 </Text>
+                {c.model && (
+                  <Text wrap="truncate-end">
+                    {modelIcon(c.model)}
+                    {c.tokens?.cost !== undefined && <Text color={costColor}> {money(c.tokens.cost)}</Text>}
+                  </Text>
+                )}
+                {(c.tokens?.saved ?? 0) > 0 && (
+                  <Text wrap="truncate-end">
+                    {savedIcon}
+                    <Text color={savedColor}> {money(c.tokens!.saved!)}</Text>
+                  </Text>
+                )}
               </Box>
               <Box width={1} flexShrink={0}>
                 <Text color={COLOR[c.status]}>{MARK[c.status]}</Text>
@@ -323,11 +441,25 @@ export const register: Register = (on, options) => {
         <Box flexDirection="column" flexShrink={0}>
           <Box flexDirection="row" gap={1}>
             <Text bold color={labelColor}>Context</Text>
-            <Text color={barColor}>{'█'.repeat(filled)}</Text>
-            <Text dimColor>{'░'.repeat(width - filled)}</Text>
+            {heavy ? (
+              <Button key="compact-bar" label="Run /compact" onPress={() => void runCompact()}>
+                <Text color={barColor}>{'█'.repeat(filled)}</Text>
+                <Text dimColor>{'░'.repeat(width - filled)}</Text>
+              </Button>
+            ) : (
+              <Text>
+                <Text color={barColor}>{'█'.repeat(filled)}</Text>
+                <Text dimColor>{'░'.repeat(width - filled)}</Text>
+              </Text>
+            )}
             <Text>{Math.round(pct * 100)}%</Text>
             <Text dimColor>{n(c.tokens)}/{n(win)} {fromEngine ? 'engine' : 'est'}</Text>
           </Box>
+          {heavy && (
+            <Text color={barColor} wrap="truncate-end">
+              {isCompacting ? 'Compacting…' : '▲ Click the bar to run /compact and save tokens'}
+            </Text>
+          )}
           {!started ? (
             <Text dimColor>No model requests yet.</Text>
           ) : (

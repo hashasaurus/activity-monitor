@@ -8,6 +8,12 @@ export type Tokens = {
   cached: number
   /** How many tool calls shared the response (1 = not shared). */
   shared: number
+  /** The model that wrote the response, as the API reports it. */
+  model?: string
+  /** This call's share of the response's price in dollars, at API list prices. */
+  cost?: number
+  /** This call's share of what cache reads saved, in dollars, versus sending them uncached. */
+  saved?: number
 }
 
 export type Activity = {
@@ -18,6 +24,8 @@ export type Activity = {
   status: 'running' | 'ok' | 'error' | 'denied'
   ms?: number
   tokens?: Tokens
+  /** The model whose response asked for the call (main loop or sub-agent). */
+  model?: string
 }
 
 /** The main loop's context as of its last model request. */
@@ -36,6 +44,6 @@ export type Totals = { in: number; out: number; cached: number; steps: number }
 
 declare module 'claude-code' {
   interface PluginState {
-    'activity-monitor': { calls: Shaped<Activity[]>; totals: Shaped<Totals>; ctx: Shaped<Ctx>; now: Shaped<number>; scroll: Shaped<number>; warming: Shaped<boolean> }
+    'activity-monitor': { calls: Shaped<Activity[]>; totals: Shaped<Totals>; ctx: Shaped<Ctx>; now: Shaped<number>; scroll: Shaped<number>; warming: Shaped<boolean>; compacting: Shaped<boolean> }
   }
 }

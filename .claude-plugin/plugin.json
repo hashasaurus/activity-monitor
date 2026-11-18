@@ -86,6 +86,54 @@
       "description": "Color of the | separator between the counts and the model name in the top info bar",
       "default": "gray"
     },
+    "opusIcon": {
+      "type": "string",
+      "title": "Opus icon",
+      "description": "Emoji shown under the token counts for calls made by an Opus model",
+      "default": "🧠"
+    },
+    "sonnetIcon": {
+      "type": "string",
+      "title": "Sonnet icon",
+      "description": "Emoji shown under the token counts for calls made by a Sonnet model",
+      "default": "🎵"
+    },
+    "haikuIcon": {
+      "type": "string",
+      "title": "Haiku icon",
+      "description": "Emoji shown under the token counts for calls made by a Haiku model",
+      "default": "🍃"
+    },
+    "fableIcon": {
+      "type": "string",
+      "title": "Fable icon",
+      "description": "Emoji shown under the token counts for calls made by a Fable model",
+      "default": "🦉"
+    },
+    "costColor": {
+      "type": "string",
+      "title": "Cost color",
+      "description": "Color of the dollar cost shown next to each model icon",
+      "default": "green"
+    },
+    "savingsIcon": {
+      "type": "string",
+      "title": "Cache savings icon",
+      "description": "Emoji shown under the model icon in front of what cache reads saved",
+      "default": "💵"
+    },
+    "savingsColor": {
+      "type": "string",
+      "title": "Cache savings color",
+      "description": "Color of the cache savings amount shown under the model icon",
+      "default": "gray"
+    },
+    "otherModelIcon": {
+      "type": "string",
+      "title": "Other model icon",
+      "description": "Emoji shown for calls made by a model that isn't Opus, Sonnet, Haiku or Fable",
+      "default": "❔"
+    },
     "warnAtPercent": {
       "type": "number",
       "title": "Warning threshold (%)",
