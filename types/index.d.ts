@@ -28,12 +28,14 @@ export type Ctx = {
   lastAt: number
   /** How long the prompt cache keeps what that request wrote, in ms. */
   ttlMs: number
+  /** The model that answered the last request, as the API reports it. */
+  model?: string
 }
 
 export type Totals = { in: number; out: number; cached: number; steps: number }
 
 declare module 'claude-code' {
   interface PluginState {
-    'activity-monitor': { calls: Shaped<Activity[]>; totals: Shaped<Totals>; ctx: Shaped<Ctx>; now: Shaped<number>; scroll: Shaped<number> }
+    'activity-monitor': { calls: Shaped<Activity[]>; totals: Shaped<Totals>; ctx: Shaped<Ctx>; now: Shaped<number>; scroll: Shaped<number>; warming: Shaped<boolean> }
   }
 }

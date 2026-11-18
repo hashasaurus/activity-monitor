@@ -16,6 +16,7 @@ const ctx = atom({ plugin: 'activity-monitor', key: 'ctx' } as const, EMPTY_CTX,
 const now = atom({ plugin: 'activity-monitor', key: 'now' } as const, 0, { shape: 'now-1' })
 const TTL_MS = { '5m': 300_000, '1h': 3_600_000 }
 const scroll = atom({ plugin: 'activity-monitor', key: 'scroll' } as const, 0, { shape: 'scroll-1' })
+const warming = atom({ plugin: 'activity-monitor', key: 'warming' } as const, false, { shape: 'warming-1' })
 const PAGE = 3
 const TICK_MS = 5000
 // Widest token line: "↓999k÷9" is 7 columns.
@@ -62,6 +63,16 @@ function span(ms: number): string {
 function num(v: unknown, fallback: number, lo: number, hi: number): number {
   const x = typeof v === 'number' && Number.isFinite(v) ? v : fallback
   return Math.min(hi, Math.max(lo, x))
+}
+
+// "claude-sonnet-5-5" -> "Sonnet 5.5"; ids it doesn't recognise are shown as given.
+function modelLabel(id: string): string {
+  const cap = (f: string) => f.charAt(0).toUpperCase() + f.slice(1)
+  let m = id.match(/claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2}))?(?!\d)/)
+  if (m) return `${cap(m[1]!)} ${m[2]}${m[3] ? '.' + m[3] : ''}`
+  m = id.match(/claude-(\d+)(?:-(\d{1,2}))?-(opus|sonnet|haiku|fable)/)
+  if (m) return `${cap(m[3]!)} ${m[1]}${m[2] ? '.' + m[2] : ''}`
+  return id
 }
 
 function n(v: number): string {
@@ -118,6 +129,7 @@ export const register: Register = (on, options) => {
         const dflt = options.cacheTtl === '1h' ? '1h' : '5m'
         await update($, ctx, c => ({
           tokens: sent + u.output_tokens,
+          model: u.model,
           lastAt: sentAt,
           ttlMs: TTL_MS[long ? '1h' : short ? '5m' : c.lastAt ? (c.ttlMs >= TTL_MS['1h'] ? '1h' : '5m') : dflt],
         }))
@@ -162,6 +174,7 @@ export const register: Register = (on, options) => {
     const list = await read($, calls)
     const tot = await read($, totals)
     const off0 = await read($, scroll)
+    const isWarming = await read($, warming)
     const mine = await read($, ctx)
     // Prefer the engine's own reading of the main loop; fall back to what turn.step saw.
     let eng: Awaited<ReturnType<typeof $.agent.list>>[number] | undefined
@@ -185,9 +198,20 @@ export const register: Register = (on, options) => {
     const cols = e.viewport?.columns ?? 80
     const width = Math.max(8, Math.min(Math.round(num(options.barWidth, 30, 10, 60)), cols - 24))
     const warnAt = num(options.compactAtPercent, 90, 1, 100) / 100
-    const color = typeof options.meterColor === 'string' && options.meterColor ? options.meterColor : 'cyan'
-    const outColor = typeof options.outgoingColor === 'string' && options.outgoingColor ? options.outgoingColor : 'magenta'
+    const color = typeof options.meterColor === 'string' && options.meterColor ? options.meterColor : '#F7931A'
+    const outColor = typeof options.outgoingColor === 'string' && options.outgoingColor ? options.outgoingColor : '#F7931A'
     const inColor = typeof options.incomingColor === 'string' && options.incomingColor ? options.incomingColor : 'cyan'
+    const opt = (v: unknown, d: string) => (typeof v === 'string' && v ? v : d)
+    const callsColor = opt(options.callsColor, 'white')
+    const runColor = opt(options.runColor, '#F7931A')
+    const failColor = opt(options.failColor, 'red')
+    const labelColor = opt(options.contextLabelColor, 'white')
+    const warnPct = num(options.warnAtPercent, 75, 1, 100) / 100
+    const warnColor = opt(options.warnColor, 'yellow')
+    const criticalColor = opt(options.criticalColor, 'red')
+    const sepColor = opt(options.separatorColor, 'gray')
+    const modelColor = opt(options.modelColor, 'green')
+    const modelName = mine.model ?? eng?.model ?? ''
     const pct = Math.min(1, c.tokens / win)
     const filled = Math.round(pct * width)
     const started = c.lastAt > 0
@@ -195,10 +219,46 @@ export const register: Register = (on, options) => {
     const leftMs = c.ttlMs - idleMs
     const expired = started && leftMs <= 0
     const compact = pct >= warnAt
+    const barColor = compact ? criticalColor : pct >= warnPct ? warnColor : color
     const ttlLabel = c.ttlMs >= TTL_MS['1h'] ? '1h' : '5m'
     const off = Math.min(off0, Math.max(0, list.length - 1))
     const running = list.filter(c => c.status === 'running').length
     const failed = list.filter(c => c.status === 'error' || c.status === 'denied').length
+    // Sends a tiny tool-less request over the session's own transcript so the prompt
+    // cache is read (and rewritten if it lapsed), then restarts the meter's idle clock.
+    const warm = async () => {
+      await update($, warming, () => true)
+      try {
+        const sentAt = await $.clock.now()
+        const r = await $.model.fork({
+          prompt: 'Cache warm-up ping. You have no tools. Do not think it over; reply with only: ok',
+        })
+        if (!r.isAnswered) {
+          $.ui.toast(`Warm-up failed: ${r.reason}`)
+        } else {
+          const u = r.usage as {
+            cache_read_input_tokens: number
+            cache_creation_input_tokens: number
+            ephemeral_1h_input_tokens?: number
+            ephemeral_5m_input_tokens?: number
+          }
+          const read = u.cache_read_input_tokens
+          const wrote = u.cache_creation_input_tokens
+          if (read + wrote > 0) {
+            await update($, ctx, cur => ({
+              ...cur,
+              lastAt: sentAt,
+              ttlMs: (u.ephemeral_1h_input_tokens ?? 0) > 0 ? TTL_MS['1h'] : (u.ephemeral_5m_input_tokens ?? 0) > 0 ? TTL_MS['5m'] : cur.ttlMs,
+            }))
+          }
+          $.ui.toast(`Warmed: ${n(read)} read, ${n(wrote)} rewritten`)
+        }
+      } catch (err) {
+        $.ui.toast(`Warm-up failed: ${err instanceof Error ? err.message : String(err)}`)
+      } finally {
+        await update($, warming, () => false)
+      }
+    }
     const clear = () => {
       void update($, scroll, () => 0)
       void update($, calls, () => [])
@@ -209,9 +269,11 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column" height={e.viewport?.rows ? Math.max(8, e.viewport.rows - 6) : undefined}>
        <Box flexDirection="column" flexShrink={0}>
         <Box flexDirection="row" gap={1}>
-          <Text bold>{list.length} calls</Text>
-          <Text color="yellow">{running} run</Text>
-          <Text color={failed ? 'red' : undefined} dimColor={!failed}>{failed} fail</Text>
+          <Text bold color={callsColor}>{list.length} calls</Text>
+          <Text color={runColor}>{running} run</Text>
+          <Text color={failed ? failColor : undefined} dimColor={!failed}>{failed} fail</Text>
+          {modelName !== '' && <Text color={sepColor}>|</Text>}
+          {modelName !== '' && <Text color={modelColor} wrap="truncate-end">{modelLabel(modelName)}</Text>}
         </Box>
         <Box flexDirection="row" gap={1}>
           <Button onPress={() => void update($, scroll, o => Math.max(0, o - PAGE))}>▲</Button>
@@ -260,8 +322,8 @@ export const register: Register = (on, options) => {
        </Box>
         <Box flexDirection="column" flexShrink={0}>
           <Box flexDirection="row" gap={1}>
-            <Text bold>Context</Text>
-            <Text color={color}>{'█'.repeat(filled)}</Text>
+            <Text bold color={labelColor}>Context</Text>
+            <Text color={barColor}>{'█'.repeat(filled)}</Text>
             <Text dimColor>{'░'.repeat(width - filled)}</Text>
             <Text>{Math.round(pct * 100)}%</Text>
             <Text dimColor>{n(c.tokens)}/{n(win)} {fromEngine ? 'engine' : 'est'}</Text>
@@ -273,7 +335,12 @@ export const register: Register = (on, options) => {
               {compact ? (
                 <Text color="red" wrap="truncate-end">⚠ Near limit · idle {span(idleMs)}</Text>
               ) : expired ? (
-                <Text color="yellow" wrap="truncate-end">↻ Reload ~{n(c.tokens)} · idle {span(idleMs)}</Text>
+                <Box flexDirection="row" gap={1}>
+                  {isWarming ? <Text color="yellow">…</Text> : <Button onPress={() => void warm()}>↻</Button>}
+                  <Text color="yellow" wrap="truncate-end">
+                    {isWarming ? 'Warming…' : `Reload ~${n(c.tokens)} · idle ${span(idleMs)} · press ↻ to warm`}
+                  </Text>
+                </Box>
               ) : (
                 <Text color={leftMs < 60_000 ? 'yellow' : 'green'} wrap="truncate-end">✓ Warm {span(leftMs)} · idle {span(idleMs)}</Text>
               )}

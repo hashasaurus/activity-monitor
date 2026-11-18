@@ -1,14 +1,14 @@
 {
   "name": "activity-monitor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A pane beside the chat with a live feed of Claude's tool calls and a context meter that shows memory use and whether the next command reloads context",
   "types": "./types/index.d.ts",
   "userConfig": {
     "meterColor": {
       "type": "string",
       "title": "Meter bar color",
-      "description": "Color of the filled part of the context meter (a name like cyan, green, magenta, or a #hex value)",
-      "default": "cyan"
+      "description": "Color of the filled part of the context meter below the warning threshold (a name like cyan, green, or a #hex value)",
+      "default": "#F7931A"
     },
     "barWidth": {
       "type": "number",
@@ -24,8 +24,8 @@
     },
     "compactAtPercent": {
       "type": "number",
-      "title": "Compact warning (%)",
-      "description": "Warn that a compaction is likely once the context passes this percent",
+      "title": "Critical threshold (%)",
+      "description": "At or above this percent the bar turns the critical color and the status line warns that a compaction is likely",
       "default": 90
     },
     "cacheTtl": {
@@ -42,13 +42,67 @@
       "type": "string",
       "title": "Outgoing token color",
       "description": "Color of the tokens sent to the model (\u2191, top line of each call)",
-      "default": "magenta"
+      "default": "#F7931A"
     },
     "incomingColor": {
       "type": "string",
       "title": "Incoming token color",
       "description": "Color of the tokens the model wrote back (\u2193, bottom line of each call)",
       "default": "cyan"
+    },
+    "callsColor": {
+      "type": "string",
+      "title": "Calls count color",
+      "description": "Color of the \"N calls\" text in the top info bar",
+      "default": "white"
+    },
+    "runColor": {
+      "type": "string",
+      "title": "Running count color",
+      "description": "Color of the \"N run\" text in the top info bar",
+      "default": "#F7931A"
+    },
+    "failColor": {
+      "type": "string",
+      "title": "Failed count color",
+      "description": "Color of the \"N fail\" text when any call has failed (dim when zero)",
+      "default": "red"
+    },
+    "contextLabelColor": {
+      "type": "string",
+      "title": "Context label color",
+      "description": "Color of the \"Context\" label next to the meter bar",
+      "default": "white"
+    },
+    "modelColor": {
+      "type": "string",
+      "title": "Model name color",
+      "description": "Color of the model name in the top info bar",
+      "default": "green"
+    },
+    "separatorColor": {
+      "type": "string",
+      "title": "Separator color",
+      "description": "Color of the | separator between the counts and the model name in the top info bar",
+      "default": "gray"
+    },
+    "warnAtPercent": {
+      "type": "number",
+      "title": "Warning threshold (%)",
+      "description": "At or above this percent the bar turns the warning color",
+      "default": 75
+    },
+    "warnColor": {
+      "type": "string",
+      "title": "Warning bar color",
+      "description": "Bar color between the warning and critical thresholds",
+      "default": "yellow"
+    },
+    "criticalColor": {
+      "type": "string",
+      "title": "Critical bar color",
+      "description": "Bar color at or above the critical threshold",
+      "default": "red"
     }
   }
 }
