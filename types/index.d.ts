@@ -26,6 +26,8 @@ export type Activity = {
   tokens?: Tokens
   /** The model whose response asked for the call (main loop or sub-agent). */
   model?: string
+  /** The loop that made the call: 'main' or a sub-agent's id. */
+  loop?: string
 }
 
 /** The main loop's context as of its last model request. */
@@ -38,6 +40,9 @@ export type Ctx = {
   ttlMs: number
   /** The model that answered the last request, as the API reports it. */
   model?: string
+  /** When the main conversation last compacted, in `$.clock.now()` ms. Until the next
+   *  request, `tokens` is the compacted size and wins over the engine's stale count. */
+  compactedAt?: number
 }
 
 export type Totals = { in: number; out: number; cached: number; steps: number }

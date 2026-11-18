@@ -187,14 +187,31 @@ export const register: Register = (on, options) => {
   on('session.compact', async ($, e, next) => {
     const r = await next(e)
     if (!e.agentId && e.trigger !== 'precompute' && r.skip === undefined) {
-      const after = (r as { tokensAfter?: number }).tokensAfter ?? 0
-      await update($, ctx, cur => ({ ...cur, tokens: after })).catch(() => {})
+      const done = r as { tokensAfter?: number; messages?: readonly unknown[] }
+      // Core usually reports the new size; if not, estimate ~4 characters a token.
+      let after = done.tokensAfter
+      if (after === undefined) {
+        try {
+          after = Math.round(JSON.stringify(done.messages ?? []).length / 4)
+        } catch {
+          after = 0
+        }
+      }
+      const at = await $.clock.now()
+      await update($, ctx, cur => ({ ...cur, tokens: after, compactedAt: at })).catch(() => {})
     }
     return r
   })
 
   on('turn.step', async function* ($, e, next) {
     const sentAt = await $.clock.now()
+    const stepLoop = e.agentId ?? 'main'
+    // The request names its model up front, so calls that run while the response
+    // still streams (and the first ones after a plugin reload) get the right icon.
+    if (e.model) lastModel.set(stepLoop, e.model)
+    // A new request in this loop means every call of its last response has
+    // started; any tokens still waiting for one would only mislabel a later call.
+    pending = pending.filter(p => p.loop !== stepLoop)
     const r = yield* next(e)
     const u = r.usage
     if (u) {
@@ -230,7 +247,24 @@ export const register: Register = (on, options) => {
           cost: price && price.cost / count,
           saved: price && price.saved / count,
         }
-        pending = [...pending, ...r.toolUses.map(t => ({ loop, tool: t.name, tokens }))].slice(-50)
+        // Calls can start while the response still streams, before these counts
+        // exist. Give those rows their tokens now, matching the response's calls
+        // in order by tool name against this loop's rows started since the
+        // request; the calls not started yet wait in `pending` for tool.call.
+        let waiting = r.toolUses.map(t => t.name)
+        await update($, calls, list => {
+          const names = r.toolUses.map(t => t.name)
+          const out = list.map(c => {
+            if (c.tokens || c.loop !== loop || c.startedAt < sentAt) return c
+            const k = names.indexOf(c.tool)
+            if (k < 0) return c
+            names.splice(k, 1)
+            return { ...c, tokens, model: tokens.model ?? c.model }
+          })
+          waiting = names
+          return out
+        })
+        pending = [...pending, ...waiting.map(tool => ({ loop, tool, tokens }))].slice(-50)
       }
     }
     return r
@@ -244,7 +278,7 @@ export const register: Register = (on, options) => {
     if (at >= 0) pending = pending.filter((_, i) => i !== at)
     const id = e.tool_use_id ?? `${e.tool}-${startedAt}`
     const model = tokens?.model ?? lastModel.get(loop)
-    const entry: Activity = { id, tool: e.tool, target: targetOf(e), startedAt, status: 'running', tokens, model }
+    const entry: Activity = { id, tool: e.tool, target: targetOf(e), startedAt, status: 'running', tokens, model, loop }
     await update($, calls, list => [...list, entry].slice(-KEEP))
     let status: Activity['status'] = 'error'
     try {
@@ -258,7 +292,7 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button, Select } = $.ui.resolve(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
     const list = await read($, calls)
     const tot = await read($, totals)
     const off0 = await read($, scroll)
@@ -273,7 +307,10 @@ export const register: Register = (on, options) => {
     } catch {
       eng = undefined
     }
-    const fromEngine = !!eng && eng.tokenCount > 0
+    // The engine's count is its last request's, so right after a compaction it still
+    // shows the old size; use the compacted size until the next request lands.
+    const justCompacted = !!mine.compactedAt && mine.compactedAt >= Math.max(mine.lastAt, eng?.lastRequest?.at ?? 0)
+    const fromEngine = !!eng && eng.tokenCount > 0 && !justCompacted
     const c: Ctx = fromEngine
       ? {
           tokens: eng!.tokenCount,
@@ -284,7 +321,7 @@ export const register: Register = (on, options) => {
     await read($, now) // subscribes the pane to the idle ticker
     const clockNow = await $.clock.now()
     const room = Math.max(1, e.viewport?.rows ?? 30) // the list box clips what doesn't fit
-    const win = fromEngine && eng!.contextWindowSize ? eng!.contextWindowSize : num(options.contextWindow, 200_000, 1000, 100_000_000)
+    const win = eng?.contextWindowSize ? eng.contextWindowSize : num(options.contextWindow, 200_000, 1000, 100_000_000)
     const cols = e.viewport?.columns ?? 80
     const width = Math.max(8, Math.min(Math.round(num(options.barWidth, 30, 10, 60)), cols - 24))
     const warnAt = num(options.compactAtPercent, 90, 1, 100) / 100
@@ -300,7 +337,12 @@ export const register: Register = (on, options) => {
     const warnColor = opt(options.warnColor, 'yellow')
     const criticalColor = opt(options.criticalColor, 'red')
     const sepColor = opt(options.separatorColor, 'gray')
+    const rowSepColor = opt(options.rowSeparatorColor, 'black')
     const modelColor = opt(options.modelColor, 'green')
+    const warmColor = opt(options.warmColor, '#CC5500')
+    const coolColor = opt(options.coolingColor, 'cyan')
+    const idleColor = opt(options.idleColor, 'green')
+    const idleLateColor = opt(options.idleLateColor, '#F7931A')
     const modelName = mine.model ?? eng?.model ?? ''
     const icons: Record<string, string> = {
       opus: opt(options.opusIcon, '🧠'),
@@ -326,6 +368,45 @@ export const register: Register = (on, options) => {
     const off = Math.min(off0, Math.max(0, list.length - 1))
     const running = list.filter(c => c.status === 'running').length
     const failed = list.filter(c => c.status === 'error' || c.status === 'denied').length
+    // Whether the rows overflow the list box, estimated from each row's height: its
+    // token column, its wrapped tool + target text, and the separator above it. The
+    // scroll and Clear buttons appear only then (or once scrolled, to scroll back).
+    const paneRows = e.viewport?.rows ? Math.max(8, e.viewport.rows - 6) : 24
+    // The model picker, opened by clicking the model name. It offers the engine's
+    // own list when /config has a model row with choices, else the /model aliases.
+    let modelChoices = MODEL_CHOICES
+    // The exact choice in effect (e.g. "fable[1m]", "opusplan"), when the engine says.
+    let chosen: string | undefined
+    if (isPicking) {
+      try {
+        const row = (await $.config.list()).find(r => r.key === 'model')
+        if (row?.options?.length) modelChoices = row.options.map(v => ({ value: v, label: modelLabel(v) || v }))
+        if (typeof row?.value === 'string' && row.value) chosen = row.value
+      } catch {
+        // keep the aliases
+      }
+      // Each choice gets its family's icon; one with no family (Default) gets two
+      // spaces in its place, an emoji's width, so the names line up.
+      modelChoices = modelChoices.map(o => {
+        const fam = familyOf(o.value)
+        return { ...o, label: `${fam ? icons[fam] ?? otherIcon : '  '} ${o.label}` }
+      })
+    }
+    // Mark the exact choice when it's one of the rows; otherwise fall back to the
+    // family of the model that last answered (its id carries no [1m] or opusplan).
+    const currentChoice = chosen && modelChoices.some(o => o.value === chosen) ? chosen : familyOf(modelName)
+    const headerRows = 2 + (isPicking ? modelChoices.length : 0) // info bar, token totals, picker rows
+    const footerRows = 1 + (heavy ? 1 : 0) + 1 // meter, compact notice, status line
+    const listRows = Math.max(1, paneRows - headerRows - footerRows)
+    const textCols = Math.max(10, cols - TOK_W - 1 - DUR_W - CLOCK_W - 4)
+    let used = 0
+    for (let i = list.length - 1; i >= 0 && used <= listRows; i--) {
+      const a = list[i]!
+      const tokLines = a.tokens ? 2 + (a.model ? 1 : 0) + ((a.tokens.saved ?? 0) > 0 ? 1 : 0) : 1
+      const textLines = Math.max(1, Math.ceil((a.tool.length + (a.target ? a.target.length + 1 : 0)) / textCols))
+      used += Math.max(tokLines, textLines) + (i < list.length - 1 ? 1 : 0)
+    }
+    const showNav = used > listRows || off > 0
     // Sends a tiny tool-less request over the session's own transcript so the prompt
     // cache is read (and rewritten if it lapsed), then restarts the meter's idle clock.
     const warm = async () => {
@@ -376,17 +457,6 @@ export const register: Register = (on, options) => {
         await update($, compacting, () => false)
       }
     }
-    // The model picker, opened by clicking the model name. It offers the engine's
-    // own list when /config has a model row with choices, else the /model aliases.
-    let modelChoices = MODEL_CHOICES
-    if (isPicking) {
-      try {
-        const row = (await $.config.list()).find(r => r.key === 'model')
-        if (row?.options?.length) modelChoices = row.options.map(v => ({ value: v, label: modelLabel(v) || v }))
-      } catch {
-        // keep the aliases
-      }
-    }
     const pickModel = async (value: string) => {
       await update($, picking, () => false)
       try {
@@ -411,31 +481,35 @@ export const register: Register = (on, options) => {
           <Text color={failed ? failColor : undefined} dimColor={!failed}>{failed} fail</Text>
           {modelName !== '' && <Text color={sepColor}>|</Text>}
           {modelName !== '' && (
-            <Button key="model-name" label="Change model" plain onPress={() => void update($, picking, p => !p)}>
+            <Button key="model-name" plain onPress={() => void update($, picking, p => !p)}>
+              <Text>{modelIcon(modelName)} </Text>
               <Text color={modelColor}>{modelLabel(modelName)}</Text>
               <Text dimColor>{isPicking ? ' ▴' : ' ▾'}</Text>
             </Button>
           )}
         </Box>
+        {/* The choices drawn open, one clickable row each, so one click on the
+            model name is enough; clicking the name again closes the list. */}
         {isPicking && (
-          <Box flexDirection="row" gap={1}>
-            <Select
-              key="model-select"
-              label="Model:"
-              options={modelChoices}
-              value={modelChoices.find(o => o.value === familyOf(modelName))?.value}
-              autoFocus
-              onSelect={v => void pickModel(v)}
-            />
-            <Button key="model-cancel" onPress={() => void update($, picking, () => false)}>Cancel</Button>
+          <Box flexDirection="column" paddingLeft={2}>
+            {modelChoices.map(o => {
+              const isCurrent = o.value === currentChoice
+              return (
+                <Button key={`model-${o.value}`} plain onPress={() => void pickModel(o.value)}>
+                  <Text color={isCurrent ? modelColor : undefined}>{isCurrent ? '● ' : '  '}{o.label}</Text>
+                </Button>
+              )
+            })}
           </Box>
         )}
-        <Box flexDirection="row" gap={1}>
-          <Button onPress={() => void update($, scroll, o => Math.max(0, o - PAGE))}>▲</Button>
-          <Button onPress={() => void update($, scroll, o => Math.min(Math.max(0, list.length - 1), o + PAGE))}>▼</Button>
-          {off > 0 && <Text dimColor>+{off} newer</Text>}
-          <Button onPress={clear}>Clear</Button>
-        </Box>
+        {showNav && (
+          <Box flexDirection="row" gap={1}>
+            <Button onPress={() => void update($, scroll, o => Math.max(0, o - PAGE))}>▲</Button>
+            <Button onPress={() => void update($, scroll, o => Math.min(Math.max(0, list.length - 1), o + PAGE))}>▼</Button>
+            {off > 0 && <Text dimColor>+{off} newer</Text>}
+            <Button onPress={clear}>Clear</Button>
+          </Box>
+        )}
         <Text dimColor>
           Tokens over {tot.steps} responses: {n(tot.in)} sent ({n(tot.cached)} cached) · {n(tot.out)} written
         </Text>
@@ -448,7 +522,7 @@ export const register: Register = (on, options) => {
           .slice(off, off + room)
           .map((c, i) => (
             <Box key={c.id} flexDirection="column" flexShrink={0}>
-            {i > 0 && <Text dimColor wrap="truncate-end">{'─'.repeat(Math.max(1, cols))}</Text>}
+            {i > 0 && <Text color={rowSepColor} wrap="truncate-end">{'─'.repeat(Math.max(1, cols))}</Text>}
             <Box flexDirection="row" gap={1} flexShrink={0}>
               <Box width={TOK_W} flexShrink={0} flexDirection="column">
                 <Text color={outColor} wrap="truncate-end">{c.tokens ? `↑${n(c.tokens.in)}` : ''}</Text>
@@ -491,7 +565,7 @@ export const register: Register = (on, options) => {
           <Box flexDirection="row" gap={1}>
             <Text bold color={labelColor}>Context</Text>
             {heavy ? (
-              <Button key="compact-bar" label="Run /compact" plain onPress={() => void runCompact()}>
+              <Button key="compact-bar" plain onPress={() => void runCompact()}>
                 <Text color={barColor}>{'█'.repeat(filled)}</Text>
                 <Text dimColor>{'░'.repeat(width - filled)}</Text>
               </Button>
@@ -523,7 +597,10 @@ export const register: Register = (on, options) => {
                   </Text>
                 </Box>
               ) : (
-                <Text color={leftMs < 60_000 ? 'yellow' : 'green'} wrap="truncate-end">✓ Warm {span(leftMs)} · idle {span(idleMs)}</Text>
+                <Text wrap="truncate-end">
+                  <Text color={leftMs < 60_000 ? coolColor : warmColor}>✓ Warm {span(leftMs)} · </Text>
+                  <Text color={leftMs < 60_000 ? idleLateColor : idleColor}>idle {span(idleMs)}</Text>
+                </Text>
               )}
             </Box>
           )}

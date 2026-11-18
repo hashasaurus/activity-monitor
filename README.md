@@ -57,9 +57,12 @@ Change these through `/config` or with `claude plugin configure activity-monitor
 | `meterColor` / `warnColor` / `criticalColor` | `#F7931A` / yellow / red | Bar colors |
 | `cacheTtl` | 5m | Cache lifetime assumed until a response reports its own (`5m` or `1h`) |
 | `opusIcon` / `sonnetIcon` / `haikuIcon` / `fableIcon` / `otherModelIcon` | 🧠 / 🎵 / 🍃 / 🦉 / ❔ | Model emojis |
+| `warmColor` / `coolingColor` | `#CC5500` / cyan | Cache status line while warm, and in its last minute before it expires |
+| `idleColor` / `idleLateColor` | green / `#F7931A` | Idle time on the cache status line, and in the cache's last minute |
 | `costColor` | green | Color of the cost next to the model icon |
 | `savingsIcon` / `savingsColor` | 💵 / gray | Cache-savings line |
 | `outgoingColor` / `incomingColor` | `#F7931A` / cyan | Colors of `↑` and `↓` |
+| `rowSeparatorColor` | black | Line between calls in the feed |
 | `callsColor`, `runColor`, `failColor`, `modelColor`, `separatorColor`, `contextLabelColor` | — | Colors in the top bar and meter label |
 
 A color can be a name such as `cyan`, or a hex value such as `#F7931A`.

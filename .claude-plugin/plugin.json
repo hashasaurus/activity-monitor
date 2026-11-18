@@ -1,6 +1,6 @@
 {
   "name": "activity-monitor",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A pane beside the chat with a live feed of Claude's tool calls and a context meter that shows memory use and whether the next command reloads context",
   "author": { "name": "hashasaurus" },
   "license": "MIT",
@@ -88,6 +88,12 @@
       "description": "Color of the | separator between the counts and the model name in the top info bar",
       "default": "gray"
     },
+    "rowSeparatorColor": {
+      "type": "string",
+      "title": "Row separator color",
+      "description": "Color of the horizontal line between calls in the feed",
+      "default": "black"
+    },
     "opusIcon": {
       "type": "string",
       "title": "Opus icon",
@@ -135,6 +141,30 @@
       "title": "Other model icon",
       "description": "Emoji shown for calls made by a model that isn't Opus, Sonnet, Haiku or Fable",
       "default": "❔"
+    },
+    "warmColor": {
+      "type": "string",
+      "title": "Warm cache color",
+      "description": "Color of the ✓ Warm status line while the prompt cache is warm",
+      "default": "#CC5500"
+    },
+    "coolingColor": {
+      "type": "string",
+      "title": "Cooling cache color",
+      "description": "Color of the ✓ Warm status line in the cache's last minute, before it expires",
+      "default": "cyan"
+    },
+    "idleColor": {
+      "type": "string",
+      "title": "Idle time color",
+      "description": "Color of the idle time on the cache status line while the cache is warm",
+      "default": "green"
+    },
+    "idleLateColor": {
+      "type": "string",
+      "title": "Idle time color near reload",
+      "description": "Color of the idle time in the cache's last minute, when the next command is close to needing a reload",
+      "default": "#F7931A"
     },
     "warnAtPercent": {
       "type": "number",
