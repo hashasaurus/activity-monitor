@@ -19,6 +19,8 @@ Costs are estimates from list prices. They don't reflect discounts, a subscripti
 
 ## Install
 
+> **Git is required.** Adding the marketplace clones this plugin's GitHub repository, so the install fails if Git isn't installed. Check with `git --version`, and if it's missing, install it from [git-scm.com](https://git-scm.com/downloads) first.
+
 Run these in a terminal:
 
 ```
