@@ -1,0 +1,12 @@
+{
+  "name": "hashasaurus",
+  "owner": { "name": "hashasaurus" },
+  "description": "Claude Code plugins by hashasaurus",
+  "plugins": [
+    {
+      "name": "activity-monitor",
+      "source": "./",
+      "description": "A pane beside the chat with a live feed of Claude's tool calls, per-call cost and cache savings, and a context meter you can click to compact"
+    }
+  ]
+}

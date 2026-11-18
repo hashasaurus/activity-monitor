@@ -2,6 +2,8 @@
   "name": "activity-monitor",
   "version": "0.2.0",
   "description": "A pane beside the chat with a live feed of Claude's tool calls and a context meter that shows memory use and whether the next command reloads context",
+  "author": { "name": "hashasaurus" },
+  "license": "MIT",
   "types": "./types/index.d.ts",
   "userConfig": {
     "meterColor": {
