@@ -18,6 +18,16 @@ const TTL_MS = { '5m': 300_000, '1h': 3_600_000 }
 const scroll = atom({ plugin: 'activity-monitor', key: 'scroll' } as const, 0, { shape: 'scroll-1' })
 const warming = atom({ plugin: 'activity-monitor', key: 'warming' } as const, false, { shape: 'warming-1' })
 const compacting = atom({ plugin: 'activity-monitor', key: 'compacting' } as const, false, { shape: 'compacting-1' })
+const picking = atom({ plugin: 'activity-monitor', key: 'picking' } as const, false, { shape: 'picking-1' })
+// What the picker offers when the engine's /config has no model row with choices:
+// the aliases /model takes, each resolving to that family's latest model.
+const MODEL_CHOICES = [
+  { value: 'default', label: 'Default (recommended)' },
+  { value: 'fable', label: 'Fable' },
+  { value: 'opus', label: 'Opus' },
+  { value: 'sonnet', label: 'Sonnet' },
+  { value: 'haiku', label: 'Haiku' },
+]
 const PAGE = 3
 const TICK_MS = 5000
 // Widest token line: "↓999k÷9" is 7 columns.
@@ -248,12 +258,13 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const { Box, Text, Button, Select } = $.ui.resolve(e)
     const list = await read($, calls)
     const tot = await read($, totals)
     const off0 = await read($, scroll)
     const isWarming = await read($, warming)
     const isCompacting = await read($, compacting)
+    const isPicking = await read($, picking)
     const mine = await read($, ctx)
     // Prefer the engine's own reading of the main loop; fall back to what turn.step saw.
     let eng: Awaited<ReturnType<typeof $.agent.list>>[number] | undefined
@@ -365,6 +376,26 @@ export const register: Register = (on, options) => {
         await update($, compacting, () => false)
       }
     }
+    // The model picker, opened by clicking the model name. It offers the engine's
+    // own list when /config has a model row with choices, else the /model aliases.
+    let modelChoices = MODEL_CHOICES
+    if (isPicking) {
+      try {
+        const row = (await $.config.list()).find(r => r.key === 'model')
+        if (row?.options?.length) modelChoices = row.options.map(v => ({ value: v, label: modelLabel(v) || v }))
+      } catch {
+        // keep the aliases
+      }
+    }
+    const pickModel = async (value: string) => {
+      await update($, picking, () => false)
+      try {
+        const r = await $.command.run({ command: 'model', args: value })
+        $.ui.toast(r.text?.trim() || `Model set to ${value}`)
+      } catch (err) {
+        $.ui.toast(`Couldn't switch model: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
     const clear = () => {
       void update($, scroll, () => 0)
       void update($, calls, () => [])
@@ -379,8 +410,26 @@ export const register: Register = (on, options) => {
           <Text color={runColor}>{running} run</Text>
           <Text color={failed ? failColor : undefined} dimColor={!failed}>{failed} fail</Text>
           {modelName !== '' && <Text color={sepColor}>|</Text>}
-          {modelName !== '' && <Text color={modelColor} wrap="truncate-end">{modelLabel(modelName)}</Text>}
+          {modelName !== '' && (
+            <Button key="model-name" label="Change model" plain onPress={() => void update($, picking, p => !p)}>
+              <Text color={modelColor}>{modelLabel(modelName)}</Text>
+              <Text dimColor>{isPicking ? ' ▴' : ' ▾'}</Text>
+            </Button>
+          )}
         </Box>
+        {isPicking && (
+          <Box flexDirection="row" gap={1}>
+            <Select
+              key="model-select"
+              label="Model:"
+              options={modelChoices}
+              value={modelChoices.find(o => o.value === familyOf(modelName))?.value}
+              autoFocus
+              onSelect={v => void pickModel(v)}
+            />
+            <Button key="model-cancel" onPress={() => void update($, picking, () => false)}>Cancel</Button>
+          </Box>
+        )}
         <Box flexDirection="row" gap={1}>
           <Button onPress={() => void update($, scroll, o => Math.max(0, o - PAGE))}>▲</Button>
           <Button onPress={() => void update($, scroll, o => Math.min(Math.max(0, list.length - 1), o + PAGE))}>▼</Button>
@@ -442,7 +491,7 @@ export const register: Register = (on, options) => {
           <Box flexDirection="row" gap={1}>
             <Text bold color={labelColor}>Context</Text>
             {heavy ? (
-              <Button key="compact-bar" label="Run /compact" onPress={() => void runCompact()}>
+              <Button key="compact-bar" label="Run /compact" plain onPress={() => void runCompact()}>
                 <Text color={barColor}>{'█'.repeat(filled)}</Text>
                 <Text dimColor>{'░'.repeat(width - filled)}</Text>
               </Button>

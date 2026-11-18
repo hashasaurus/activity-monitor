@@ -10,6 +10,7 @@ A Claude Code plugin that opens an **Activity** pane beside the chat. It shows a
 - **Cost per call.** Shown in green next to the model icon. It's the call's share of the response's price at Anthropic's public API list prices.
 - **Cache savings.** A 💵 line in gray shows what prompt-cache reads saved, compared with sending the same tokens uncached.
 - **Context meter.** A bar shows how full the context window is. It turns yellow at 75% and red at 90%. In yellow or red you can **click the bar to run `/compact`**. The meter updates as soon as any compaction finishes.
+- **Model picker.** Click the model name in the top bar (marked ▾) to choose a different model from a list. Picking one runs `/model` for you. If Claude is mid-reply, the switch waits until the reply finishes. The name in the top bar changes after the next request, because it shows the model that actually answered.
 - **Cache status.** The line under the bar says whether the prompt cache is still warm. Once the cache has expired, press **↻** to warm it with a tiny request before you continue.
 
 Costs are estimates from list prices. They don't reflect discounts, a subscription plan, or batch pricing.
@@ -31,6 +32,8 @@ Or, inside Claude Code:
 ```
 
 Then restart Claude Code or run `/reload-plugins`. The pane opens by itself when a session starts. If you close it, type `/activity` to reopen it.
+
+After installing, you may see a message like `24 userConfig options not yet set — run /plugin configure…`. Every option has a default, so you can ignore it. Configure only the settings you want to change (see [Settings](#settings)).
 
 This plugin runs its own code to draw the pane, so Claude Code may ask you to trust it the first time it loads.
 

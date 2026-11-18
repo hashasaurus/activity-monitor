@@ -44,6 +44,6 @@ export type Totals = { in: number; out: number; cached: number; steps: number }
 
 declare module 'claude-code' {
   interface PluginState {
-    'activity-monitor': { calls: Shaped<Activity[]>; totals: Shaped<Totals>; ctx: Shaped<Ctx>; now: Shaped<number>; scroll: Shaped<number>; warming: Shaped<boolean>; compacting: Shaped<boolean> }
+    'activity-monitor': { calls: Shaped<Activity[]>; totals: Shaped<Totals>; ctx: Shaped<Ctx>; now: Shaped<number>; scroll: Shaped<number>; warming: Shaped<boolean>; compacting: Shaped<boolean>; picking: Shaped<boolean> }
   }
 }
