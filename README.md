@@ -11,7 +11,9 @@ A Claude Code plugin that opens an **Activity** pane beside the chat. It shows a
 - **Cache savings.** A 💵 line in gray shows what prompt-cache reads saved, compared with sending the same tokens uncached.
 - **Context meter.** A bar shows how full the context window is. It turns yellow at 75% and red at 90%. In yellow or red you can **click the bar to run `/compact`**. The meter updates as soon as any compaction finishes.
 - **Model picker.** Click the model name in the top bar (marked ▾) to choose a different model from a list. Picking one runs `/model` for you. If Claude is mid-reply, the switch waits until the reply finishes. The name in the top bar changes after the next request, because it shows the model that actually answered.
-- **Cache status.** The line under the bar says whether the prompt cache is still warm. Once the cache has expired, press **↻** to warm it with a tiny request before you continue.
+- **Cache status.** The line under the bar shows how long the prompt cache stays warm and how long you've been idle. While it's warm, your next message reads the conversation from the cache at a fraction of the normal price. Once it expires, the next message sends the whole conversation again and pays to rewrite the cache. Nothing in the conversation is lost either way; only the cost changes.
+  - In the last few minutes before it expires (5 by default, see `coolingMinutes`), the line says **Cooling** and shows **↻**. Press it to keep the cache warm: a tiny request reads the cache and restarts its timer, which costs far less than a rewrite later. It's worth doing if you'll keep working in this session.
+  - After the cache has expired, **↻** rewrites it right away. That costs the same as your next message would, so the only gain is a faster first reply.
 
 Costs are estimates from list prices. They don't reflect discounts, a subscription plan, or batch pricing.
 
@@ -57,8 +59,9 @@ Change these through `/config` or with `claude plugin configure activity-monitor
 | `meterColor` / `warnColor` / `criticalColor` | `#F7931A` / yellow / red | Bar colors |
 | `cacheTtl` | 5m | Cache lifetime assumed until a response reports its own (`5m` or `1h`) |
 | `opusIcon` / `sonnetIcon` / `haikuIcon` / `fableIcon` / `otherModelIcon` | 🧠 / 🎵 / 🍃 / 🦉 / ❔ | Model emojis |
-| `warmColor` / `coolingColor` | `#CC5500` / cyan | Cache status line while warm, and in its last minute before it expires |
-| `idleColor` / `idleLateColor` | green / `#F7931A` | Idle time on the cache status line, and in the cache's last minute |
+| `coolingMinutes` | 5 | How long before the cache expires the status line shows Cooling and offers ↻ (at most a fifth of the cache's lifetime, so the last minute of a 5-minute cache) |
+| `warmColor` / `coolingColor` | `#CC5500` / cyan | Cache status line while warm, and while cooling |
+| `idleColor` / `idleLateColor` | green / `#F7931A` | Idle time on the cache status line, and while cooling |
 | `costColor` | green | Color of the cost next to the model icon |
 | `savingsIcon` / `savingsColor` | 💵 / gray | Cache-savings line |
 | `outgoingColor` / `incomingColor` | `#F7931A` / cyan | Colors of `↑` and `↓` |

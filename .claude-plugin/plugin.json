@@ -142,6 +142,12 @@
       "description": "Emoji shown for calls made by a model that isn't Opus, Sonnet, Haiku or Fable",
       "default": "❔"
     },
+    "coolingMinutes": {
+      "type": "number",
+      "title": "Cooling window (minutes)",
+      "description": "How long before the prompt cache expires the status line shows Cooling and offers ↻ to keep it warm (0-60; at most a fifth of the cache's lifetime)",
+      "default": 5
+    },
     "warmColor": {
       "type": "string",
       "title": "Warm cache color",
@@ -151,7 +157,7 @@
     "coolingColor": {
       "type": "string",
       "title": "Cooling cache color",
-      "description": "Color of the ✓ Warm status line in the cache's last minute, before it expires",
+      "description": "Color of the ✓ Cooling status line in the cooling window before the cache expires",
       "default": "cyan"
     },
     "idleColor": {
@@ -163,7 +169,7 @@
     "idleLateColor": {
       "type": "string",
       "title": "Idle time color near reload",
-      "description": "Color of the idle time in the cache's last minute, when the next command is close to needing a reload",
+      "description": "Color of the idle time in the cooling window, when the next command is close to needing a reload",
       "default": "#F7931A"
     },
     "warnAtPercent": {

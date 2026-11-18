@@ -314,7 +314,9 @@ export const register: Register = (on, options) => {
     const c: Ctx = fromEngine
       ? {
           tokens: eng!.tokenCount,
-          lastAt: eng!.lastRequest?.at ?? mine.lastAt,
+          // A warm-up ping is a fork, not a main-loop request, so the engine's
+          // time misses it; take whichever is later.
+          lastAt: Math.max(eng!.lastRequest?.at ?? 0, mine.lastAt),
           ttlMs: eng!.lastRequest?.cacheTtl ? TTL_MS[eng!.lastRequest.cacheTtl] : mine.ttlMs,
         }
       : mine
@@ -361,6 +363,11 @@ export const register: Register = (on, options) => {
     const idleMs = started ? Math.max(0, clockNow - c.lastAt) : 0
     const leftMs = c.ttlMs - idleMs
     const expired = started && leftMs <= 0
+    // The cooling window before expiry, when ↻ shows: a warm-up then costs only a
+    // cache read and restarts the timer. Capped at a fifth of the cache's lifetime,
+    // so a 5-minute cache cools in its last minute.
+    const coolMs = Math.min(num(options.coolingMinutes, 5, 0, 60) * 60_000, c.ttlMs / 5)
+    const cooling = started && !expired && leftMs < coolMs
     const compact = pct >= warnAt
     const heavy = pct >= warnPct || compact // yellow or red: the bar becomes a /compact button
     const barColor = compact ? criticalColor : pct >= warnPct ? warnColor : color
@@ -593,13 +600,22 @@ export const register: Register = (on, options) => {
                 <Box flexDirection="row" gap={1}>
                   {isWarming ? <Text color="yellow">…</Text> : <Button onPress={() => void warm()}>↻</Button>}
                   <Text color="yellow" wrap="truncate-end">
-                    {isWarming ? 'Warming…' : `Reload ~${n(c.tokens)} · idle ${span(idleMs)} · press ↻ to warm`}
+                    {isWarming ? 'Warming…' : `Expired · next message reloads ~${n(c.tokens)} · idle ${span(idleMs)} · ↻ reloads now`}
+                  </Text>
+                </Box>
+              ) : cooling ? (
+                <Box flexDirection="row" gap={1}>
+                  {isWarming ? <Text color={coolColor}>…</Text> : <Button onPress={() => void warm()}>↻</Button>}
+                  <Text wrap="truncate-end">
+                    <Text color={coolColor}>{isWarming ? 'Warming…' : `✓ Cooling ${span(leftMs)} · `}</Text>
+                    {!isWarming && <Text color={idleLateColor}>idle {span(idleMs)}</Text>}
+                    {!isWarming && <Text dimColor> · ↻ keeps it warm</Text>}
                   </Text>
                 </Box>
               ) : (
                 <Text wrap="truncate-end">
-                  <Text color={leftMs < 60_000 ? coolColor : warmColor}>✓ Warm {span(leftMs)} · </Text>
-                  <Text color={leftMs < 60_000 ? idleLateColor : idleColor}>idle {span(idleMs)}</Text>
+                  <Text color={warmColor}>✓ Warm {span(leftMs)} · </Text>
+                  <Text color={idleColor}>idle {span(idleMs)}</Text>
                 </Text>
               )}
             </Box>
