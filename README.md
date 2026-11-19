@@ -24,7 +24,7 @@ Click the model name to open it; click again to close it. Show Totals and Show C
 
 ### The feed
 One entry per tool call, newest first, including calls made by sub-agents. Scroll it with the mouse wheel. It keeps the newest 300 calls and comes back after Claude Code restarts or the session is resumed.
-- **Left column.** `↑` is the context sent to the model and `↓` is what the model wrote back; `÷N` means N calls shared one response, so its tokens are split between them. Below them: the model emoji (🧠 Opus, 🎵 Sonnet, 🍃 Haiku, 🦉 Fable, ❔ anything else) with the call's cost in green, the 💵 cache savings in gray, and the call's duration and start time.
+- **Left column.** `↑` is the context sent to the model and `↓` is what the model wrote back; `÷N` means N calls shared one response, so its tokens are split between them. Below them: the model emoji (🧠 Opus, 🎵 Sonnet, 🍃 Haiku, 🦉 Fable, ❔ anything else) with the call's cost in green (on an Agent call, followed by the emoji of the model its sub-agent ran on, as in `🧠 $0.03 🎵`), the 💵 cache savings in gray, and the call's duration and start time.
 - **Right column.** A mark for the result (⚡ worked, 💥 failed), the tool name, and its target.
 
 Cost is the call's share of the response's price at Anthropic's public API list prices. Savings compare cache reads with sending the same tokens uncached.

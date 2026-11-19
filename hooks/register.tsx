@@ -53,6 +53,8 @@ const TOK_W = DUR_W + 1 + CLOCK_W
 // A response's usage names no tool-call ids, only the calls in order, so each
 // call waiting to run is matched by loop and tool name, first come first served.
 type Pending = { loop: string; tool: string; tokens: Tokens }
+// Sub-agent loops already tied to the Agent call that started them.
+const linked = new Set<string>()
 let pending: Pending[] = []
 // The model each loop ('main' or an agent id) last used, for calls with no matched response.
 const lastModel = new Map<string, string>()
@@ -284,6 +286,16 @@ export const register: Register = (on, options) => {
       }
       const loop = e.agentId ?? 'main'
       if (u.model) lastModel.set(loop, u.model)
+      // A sub-agent's first answer names its model: give it to the Agent call that
+      // started it (the oldest running one not yet linked), shown after its cost.
+      if (loop !== 'main' && u.model && !linked.has(loop)) {
+        linked.add(loop)
+        const m = u.model
+        await update($, calls, list => {
+          const k = list.findIndex(c => (c.tool === 'Agent' || c.tool === 'Task') && c.status === 'running' && !c.subModel)
+          return k < 0 ? list : list.map((c, i) => (i === k ? { ...c, subModel: m } : c))
+        })
+      }
       const count = r.toolUses.length
       const price = costOf({ ...u, model: u.model ?? lastModel.get(loop) }, sent)
       if (count > 0) {
@@ -605,9 +617,9 @@ export const register: Register = (on, options) => {
               (a.tokens ? `${n(a.tokens.in)}/${n(a.tokens.out)}${a.tokens.shared > 1 ? `÷${a.tokens.shared}` : ''}` : '').padEnd(17),
               (a.tokens?.cost !== undefined ? money(a.tokens.cost) : '').padEnd(7),
               ((a.tokens?.saved ?? 0) > 0 ? money(a.tokens!.saved!) : '').padEnd(7),
-              a.model ? modelLabel(a.model) || a.model : '-',
+              (a.model ? modelLabel(a.model) || a.model : '-') + (a.loop && a.loop !== 'main' ? ' (sub-agent)' : ''),
               a.tool,
-              a.target,
+              a.target + (a.subModel ? ` [sub-agent: ${modelLabel(a.subModel) || a.subModel}]` : ''),
             ].join('  '),
           ),
           '',
@@ -723,6 +735,7 @@ export const register: Register = (on, options) => {
                   <Text wrap="truncate-end">
                     {modelIcon(c.model)}
                     {c.tokens?.cost !== undefined && <Text color={costColor}> {money(c.tokens.cost)}</Text>}
+                    {c.subModel && <Text> {modelIcon(c.subModel)}</Text>}
                   </Text>
                 )}
                 {(c.tokens?.saved ?? 0) > 0 && (

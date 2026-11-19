@@ -28,6 +28,8 @@ export type Activity = {
   model?: string
   /** The loop that made the call: 'main' or a sub-agent's id. */
   loop?: string
+  /** For an Agent call: the model its sub-agent ran on. */
+  subModel?: string
 }
 
 /** The main loop's context as of its last model request. */
