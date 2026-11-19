@@ -15,7 +15,7 @@ A Claude Code plugin that opens an **Activity** pane beside the chat. It shows a
   They count every response, including final answers that call no tools.
 
 ### The ≡ menu
-Click the model name to open it; click again to close it.
+Click the model name to open it; click again to close it. Show Totals and Show Commands are remembered across sessions.
 - **Models.** Pick one to run `/model` for you. If Claude is mid-reply, the switch waits until the reply finishes. The name in the top bar changes after the next request, because it shows the model that actually answered.
 - **◉ Show Totals.** Hides or shows the three totals lines.
 - **◉ Show Commands.** Hides or shows the text after each tool name (the file, command or pattern). While hidden, a `›` follows each tool name: click the name to show that one call's target. The `showTargets` setting picks whether targets start shown.
@@ -23,7 +23,7 @@ Click the model name to open it; click again to close it.
 - **✕ Clear Logs.** Empties the feed and resets the totals.
 
 ### The feed
-One entry per tool call, newest first, including calls made by sub-agents. Scroll it with the mouse wheel (or the arrow keys while the pane has focus).
+One entry per tool call, newest first, including calls made by sub-agents. Scroll it with the mouse wheel. It keeps the newest 300 calls and comes back after Claude Code restarts or the session is resumed.
 - **Left column.** `↑` is the context sent to the model and `↓` is what the model wrote back; `÷N` means N calls shared one response, so its tokens are split between them. Below them: the model emoji (🧠 Opus, 🎵 Sonnet, 🍃 Haiku, 🦉 Fable, ❔ anything else) with the call's cost in green, the 💵 cache savings in gray, and the call's duration and start time.
 - **Right column.** A mark for the result (⚡ worked, 💥 failed), the tool name, and its target.
 
@@ -90,7 +90,7 @@ Change these through `/config` or with `claude plugin configure activity-monitor
 | `warmIcon` / `coolingIcon` | 🌡 / 🧊 | Mark in front of Warm and Cooling on the cache status line |
 | `okIcon` / `errorIcon` | ⚡ / 💥 | Mark beside a call that worked, and one that failed |
 | `logFolder` | (home)/claude-activity-logs | Where Save Log writes its files |
-| `showTargets` | true | Show each call's target after the tool name (Show Commands in the model list overrides it for the session) |
+| `showTargets` | true | Whether call targets start shown on a new install; once Show Commands in the ≡ menu is clicked, that choice is remembered instead |
 | `askCompactFocus` | true | Ask for focus instructions when the bar is clicked to compact |
 | `outgoingColor` / `incomingColor` | `#F7931A` / cyan | Colors of `↑` and `↓` |
 | `rowSeparatorColor` | black | Line between calls in the feed |

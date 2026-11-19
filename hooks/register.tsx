@@ -1,11 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { Activity, Ctx, Tokens } from '../types'
+import type { Activity, Ctx, Tokens, Totals } from '../types'
 
 const PANE = 'activity-monitor'
 const TITLE = 'Activity'
 const KEEP = 300
+// How many sessions' feeds the store keeps for restarts and resumes.
+const SAVED_SESSIONS = 10
 const calls = atom({ plugin: 'activity-monitor', key: 'calls' } as const, [], { shape: 'calls-1' })
 const totals = atom({ plugin: 'activity-monitor', key: 'totals' } as const, { in: 0, out: 0, cached: 0, steps: 0 }, {
   shape: 'totals-1',
@@ -175,11 +177,43 @@ const COLOR: Record<Activity['status'], string | undefined> = {
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'activity', description: 'Open the Activity pane (live feed of tool calls)' })
+    // Bring back this session's feed after a restart or resume: the session's
+    // state starts empty in a new process, so a snapshot is kept in the store.
+    const sid = await $.session.id()
+    const saveKey = `feed:${sid}`
+    let lastSaved = ''
+    try {
+      const snap = (await $.store.get(saveKey)) as { calls?: Activity[]; totals?: Totals; ctx?: Ctx } | undefined
+      if (snap && (await read($, calls)).length === 0) {
+        // Calls still running when the process ended never finished.
+        if (snap.calls) await update($, calls, () => snap.calls!.map(c => (c.status === 'running' ? { ...c, status: 'error' as const } : c)))
+        if (snap.totals) await update($, totals, () => snap.totals!)
+        if (snap.ctx) await update($, ctx, () => snap.ctx!)
+      }
+    } catch {}
+    // The menu toggles, as last set in any session.
+    try {
+      const t = await $.store.get('pref:totalsShown')
+      if (typeof t === 'boolean') await update($, totalsShown, () => t)
+      const c = await $.store.get('pref:targetsShown')
+      if (typeof c === 'boolean') await update($, targetsShown, () => c)
+    } catch {}
     void $.ui.open({ id: PANE, title: TITLE })
-    // Redraw on a timer so the idle clock and cache countdown stay live.
+    // Redraw on a timer so the idle clock and cache countdown stay live, and
+    // save the feed when it changed.
     $.clock.every(TICK_MS, async () => {
       const t = await $.clock.now()
       await update($, now, () => t)
+      try {
+        const snap = { calls: await read($, calls), totals: await read($, totals), ctx: await read($, ctx), at: t }
+        const text = JSON.stringify([snap.calls, snap.totals, snap.ctx])
+        if (text === lastSaved) return
+        lastSaved = text
+        await $.store.set(saveKey, snap)
+        // Keep the newest few sessions' feeds; drop older ones.
+        const keys = (await $.store.keys()).filter(k => k.startsWith('feed:') && k !== saveKey)
+        for (const k of keys.slice(0, Math.max(0, keys.length - SAVED_SESSIONS + 1))) await $.store.delete(k)
+      } catch {}
     })
     return next(e)
   })
@@ -623,7 +657,10 @@ export const register: Register = (on, options) => {
             })}
             {/* View options, below the models and set apart by a rule. */}
             <Text color={sepColor}>{'─'.repeat(Math.max(4, Math.min(24, cols - 2)))}</Text>
-            <Button key="totals-toggle" plain onPress={() => void update($, totalsShown, v => !v)}>
+            <Button key="totals-toggle" plain onPress={() => {
+              void update($, totalsShown, () => !showTot)
+              void $.store.set('pref:totalsShown', !showTot).catch(() => {})
+            }}>
               <Text>{showTot ? '◉' : '○'} Show Totals</Text>
             </Button>
             <Button
@@ -631,6 +668,7 @@ export const register: Register = (on, options) => {
               plain
               onPress={() => {
                 void update($, targetsShown, () => !showAll)
+                void $.store.set('pref:targetsShown', !showAll).catch(() => {})
                 void update($, opened, () => [])
               }}
             >
