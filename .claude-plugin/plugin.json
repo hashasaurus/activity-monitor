@@ -1,8 +1,10 @@
 {
   "name": "activity-monitor",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A pane beside the chat with a live feed of Claude's tool calls and a context meter that shows memory use and whether the next command reloads context",
-  "author": { "name": "hashasaurus" },
+  "author": {
+    "name": "hashasaurus"
+  },
   "license": "MIT",
   "types": "./types/index.d.ts",
   "userConfig": {
@@ -43,13 +45,13 @@
     "outgoingColor": {
       "type": "string",
       "title": "Outgoing token color",
-      "description": "Color of the tokens sent to the model (\u2191, top line of each call)",
+      "description": "Color of the tokens sent to the model (↑, top line of each call)",
       "default": "#F7931A"
     },
     "incomingColor": {
       "type": "string",
       "title": "Incoming token color",
-      "description": "Color of the tokens the model wrote back (\u2193, bottom line of each call)",
+      "description": "Color of the tokens the model wrote back (↓, bottom line of each call)",
       "default": "cyan"
     },
     "callsColor": {
@@ -121,7 +123,7 @@
     "costColor": {
       "type": "string",
       "title": "Cost color",
-      "description": "Color of the dollar cost shown next to each model icon",
+      "description": "Color of dollar spend: the cost next to each model icon and the Spent total at the top",
       "default": "green"
     },
     "savingsIcon": {
@@ -133,7 +135,7 @@
     "savingsColor": {
       "type": "string",
       "title": "Cache savings color",
-      "description": "Color of the cache savings amount shown under the model icon",
+      "description": "Color of cache savings: the amount under each model icon and the cache saved total at the top",
       "default": "gray"
     },
     "otherModelIcon": {
@@ -151,13 +153,13 @@
     "warmColor": {
       "type": "string",
       "title": "Warm cache color",
-      "description": "Color of the ✓ Warm status line while the prompt cache is warm",
+      "description": "Color of the Warm status line while the prompt cache is warm",
       "default": "#CC5500"
     },
     "coolingColor": {
       "type": "string",
       "title": "Cooling cache color",
-      "description": "Color of the ✓ Cooling status line in the cooling window before the cache expires",
+      "description": "Color of the Cooling status line in the cooling window before the cache expires",
       "default": "cyan"
     },
     "idleColor": {
@@ -189,6 +191,60 @@
       "title": "Critical bar color",
       "description": "Bar color at or above the critical threshold",
       "default": "red"
+    },
+    "askCompactFocus": {
+      "type": "boolean",
+      "title": "Ask for compact focus",
+      "description": "When the context bar is clicked, ask what the compaction summary should focus on (like /compact <focus>). Enter on 'Compact now' skips it",
+      "default": true
+    },
+    "showTargets": {
+      "type": "boolean",
+      "title": "Show call targets",
+      "description": "Show each call's target (file, command, pattern) after the tool name. Show Commands in the model list (click the model name) overrides this for the session; while hidden, click a tool name to show its target",
+      "default": true
+    },
+    "totalsLabelColor": {
+      "type": "string",
+      "title": "Token totals label color",
+      "description": "Color of the Tokens:, Cached: and Written: labels on the token totals lines (blank = dim)",
+      "default": ""
+    },
+    "totalsValueColor": {
+      "type": "string",
+      "title": "Token totals value color",
+      "description": "Color of the numbers on the token totals line (blank = dim)",
+      "default": ""
+    },
+    "okIcon": {
+      "type": "string",
+      "title": "Succeeded icon",
+      "description": "Mark beside a call that worked (an emoji or a character such as ✓)",
+      "default": "⚡"
+    },
+    "errorIcon": {
+      "type": "string",
+      "title": "Failed icon",
+      "description": "Mark beside a call that failed (an emoji or a character such as ✗)",
+      "default": "💥"
+    },
+    "warmIcon": {
+      "type": "string",
+      "title": "Warm cache icon",
+      "description": "Mark in front of Warm on the cache status line",
+      "default": "🌡"
+    },
+    "coolingIcon": {
+      "type": "string",
+      "title": "Cooling cache icon",
+      "description": "Mark in front of Cooling on the cache status line",
+      "default": "🧊"
+    },
+    "logFolder": {
+      "type": "string",
+      "title": "Log folder",
+      "description": "Folder that Save Log writes to (blank = claude-activity-logs in your home folder)",
+      "default": ""
     }
   }
 }

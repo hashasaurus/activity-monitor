@@ -4,15 +4,35 @@ A Claude Code plugin that opens an **Activity** pane beside the chat. It shows a
 
 ## What it shows
 
-- **Live tool-call feed.** One row per call has the tool, its target, whether it worked, how long it took, and when it started. Calls made by sub-agents appear too.
-- **Tokens per call.** `↑` is the context sent to the model and `↓` is what the model wrote back. `÷N` means N calls shared one response, so its tokens are split between them.
-- **Which model made the call.** Each row has an emoji: 🧠 Opus, 🎵 Sonnet, 🍃 Haiku, 🦉 Fable, ❔ anything else. That makes model switches and sub-agents easy to spot.
-- **Cost per call.** Shown in green next to the model icon. It's the call's share of the response's price at Anthropic's public API list prices.
-- **Cache savings.** A 💵 line in gray shows what prompt-cache reads saved, compared with sending the same tokens uncached.
-- **Context meter.** A bar shows how full the context window is. It turns yellow at 75% and red at 90%. In yellow or red you can **click the bar to run `/compact`**. The meter updates as soon as any compaction finishes.
-- **Model picker.** Click the model name in the top bar (marked ▾) to choose a different model from a list. Picking one runs `/model` for you. If Claude is mid-reply, the switch waits until the reply finishes. The name in the top bar changes after the next request, because it shows the model that actually answered.
-- **Cache status.** The line under the bar shows how long the prompt cache stays warm and how long you've been idle. While it's warm, your next message reads the conversation from the cache at a fraction of the normal price. Once it expires, the next message sends the whole conversation again and pays to rewrite the cache. Nothing in the conversation is lost either way; only the cost changes.
-  - In the last few minutes before it expires (5 by default, see `coolingMinutes`), the line says **Cooling** and shows **↻**. Press it to keep the cache warm: a tiny request reads the cache and restarts its timer, which costs far less than a rewrite later. It's worth doing if you'll keep working in this session.
+### Top bar
+- **Counts.** How many calls, how many are running, and how many failed. In a narrow pane the words drop and `|` separates the numbers.
+- **Model.** The emoji and name of the model that answered last. Click it (marked **≡**) to open the menu.
+- **Session totals.** Three lines under the top bar:
+  - `Tokens: 15.0M ($4.34)`: context sent, and what the session has spent (green).
+  - `Cached: 14.7M ($41.27)`: how much of it was read from the cache, and what that saved (gray).
+  - `Written: 61k`: what the model wrote.
+
+  They count every response, including final answers that call no tools.
+
+### The ≡ menu
+Click the model name to open it; click again to close it.
+- **Models.** Pick one to run `/model` for you. If Claude is mid-reply, the switch waits until the reply finishes. The name in the top bar changes after the next request, because it shows the model that actually answered.
+- **◉ Show Totals.** Hides or shows the three totals lines.
+- **◉ Show Commands.** Hides or shows the text after each tool name (the file, command or pattern). While hidden, a `›` follows each tool name: click the name to show that one call's target. The `showTargets` setting picks whether targets start shown.
+- **💾 Save Log.** Writes the feed to a text file: the session totals, then one line per call (time, status, duration, tokens, cost, savings, model, tool, target). Files go to `claude-activity-logs` in your home folder unless `logFolder` says otherwise, named by date and time, so each save is a new file.
+- **✕ Clear Logs.** Empties the feed and resets the totals.
+
+### The feed
+One entry per tool call, newest first, including calls made by sub-agents. Scroll it with the mouse wheel (or the arrow keys while the pane has focus).
+- **Left column.** `↑` is the context sent to the model and `↓` is what the model wrote back; `÷N` means N calls shared one response, so its tokens are split between them. Below them: the model emoji (🧠 Opus, 🎵 Sonnet, 🍃 Haiku, 🦉 Fable, ❔ anything else) with the call's cost in green, the 💵 cache savings in gray, and the call's duration and start time.
+- **Right column.** A mark for the result (⚡ worked, 💥 failed), the tool name, and its target.
+
+Cost is the call's share of the response's price at Anthropic's public API list prices. Savings compare cache reads with sending the same tokens uncached.
+
+### Bottom
+- **Context meter.** A bar shows how full the context window is. It turns yellow at 75% and red at 90%. In yellow or red you can **click the bar to run `/compact`**. A quick question then asks what the summary should focus on, as `/compact <focus>` does. Press Enter on **Compact now** to skip it, pick **Focus on current task**, or type your own focus under Other. Esc cancels. The meter updates as soon as any compaction finishes. In a narrow pane the Context label drops.
+- **Cache status.** 🌡 **Warm** shows how long the prompt cache stays warm and how long you've been idle. While it's warm, your next message reads the conversation from the cache at a fraction of the normal price. Once it expires, the next message sends the whole conversation again and pays to rewrite the cache. Nothing in the conversation is lost either way; only the cost changes.
+  - In the last few minutes before it expires (5 by default, see `coolingMinutes`), the line says 🧊 **Cooling** and shows **↻**. Press it to keep the cache warm: a tiny request reads the cache and restarts its timer, which costs far less than a rewrite later. It's worth doing if you'll keep working in this session.
   - After the cache has expired, **↻** rewrites it right away. That costs the same as your next message would, so the only gain is a faster first reply.
 
 Costs are estimates from list prices. They don't reflect discounts, a subscription plan, or batch pricing.
@@ -64,8 +84,14 @@ Change these through `/config` or with `claude plugin configure activity-monitor
 | `coolingMinutes` | 5 | How long before the cache expires the status line shows Cooling and offers ↻ (at most a fifth of the cache's lifetime, so the last minute of a 5-minute cache) |
 | `warmColor` / `coolingColor` | `#CC5500` / cyan | Cache status line while warm, and while cooling |
 | `idleColor` / `idleLateColor` | green / `#F7931A` | Idle time on the cache status line, and while cooling |
-| `costColor` | green | Color of the cost next to the model icon |
-| `savingsIcon` / `savingsColor` | 💵 / gray | Cache-savings line |
+| `costColor` | green | Color of dollar spend: per call and the session total (first amount) |
+| `savingsIcon` / `savingsColor` | 💵 / gray | Cache savings: per call and the session total (second amount) |
+| `totalsLabelColor` / `totalsValueColor` | dim / dim | Labels (Tokens, Cached, Written) and numbers on the token totals lines; leave blank for dim |
+| `warmIcon` / `coolingIcon` | 🌡 / 🧊 | Mark in front of Warm and Cooling on the cache status line |
+| `okIcon` / `errorIcon` | ⚡ / 💥 | Mark beside a call that worked, and one that failed |
+| `logFolder` | (home)/claude-activity-logs | Where Save Log writes its files |
+| `showTargets` | true | Show each call's target after the tool name (Show Commands in the model list overrides it for the session) |
+| `askCompactFocus` | true | Ask for focus instructions when the bar is clicked to compact |
 | `outgoingColor` / `incomingColor` | `#F7931A` / cyan | Colors of `↑` and `↓` |
 | `rowSeparatorColor` | black | Line between calls in the feed |
 | `callsColor`, `runColor`, `failColor`, `modelColor`, `separatorColor`, `contextLabelColor` | — | Colors in the top bar and meter label |

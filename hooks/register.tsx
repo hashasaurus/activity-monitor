@@ -19,6 +19,12 @@ const scroll = atom({ plugin: 'activity-monitor', key: 'scroll' } as const, 0, {
 const warming = atom({ plugin: 'activity-monitor', key: 'warming' } as const, false, { shape: 'warming-1' })
 const compacting = atom({ plugin: 'activity-monitor', key: 'compacting' } as const, false, { shape: 'compacting-1' })
 const picking = atom({ plugin: 'activity-monitor', key: 'picking' } as const, false, { shape: 'picking-1' })
+// Whether the feed shows each call's target. null follows the showTargets setting
+// until the header toggle is clicked in this session.
+const targetsShown = atom({ plugin: 'activity-monitor', key: 'targetsShown' } as const, null as boolean | null, { shape: 'targets-1' })
+const totalsShown = atom({ plugin: 'activity-monitor', key: 'totalsShown' } as const, true as boolean, { shape: 'totals-1' })
+// Calls whose target was clicked open while targets are hidden.
+const opened = atom({ plugin: 'activity-monitor', key: 'opened' } as const, [] as string[], { shape: 'opened-1' })
 // What the picker offers when the engine's /config has no model row with choices:
 // the aliases /model takes, each resolving to that family's latest model.
 const MODEL_CHOICES = [
@@ -28,13 +34,19 @@ const MODEL_CHOICES = [
   { value: 'sonnet', label: 'Sonnet' },
   { value: 'haiku', label: 'Haiku' },
 ]
-const PAGE = 3
+// The choices offered when the context bar is clicked to compact.
+const COMPACT_NOW = 'Compact now'
+const COMPACT_TASK = 'Focus on current task'
+const TASK_FOCUS =
+  'Focus on the current task: keep its goal, decisions made, open items and the files involved; drop finished side topics.'
 const TICK_MS = 5000
 // Widest token line: "↓999k÷9" is 7 columns.
 // Widest model line: "🧠 $12.34" is 9 columns (an emoji takes two).
-const TOK_W = 9
-const DUR_W = 6 // "999ms", "12.3s"
+const DUR_W = 5 // "999ms", "12.3s"
 const CLOCK_W = 8 // hh:mm:ss
+// The left column: tokens, model and cost, savings, and under them the call's
+// duration and start time side by side.
+const TOK_W = DUR_W + 1 + CLOCK_W
 
 // A response's usage names no tool-call ids, only the calls in order, so each
 // call waiting to run is matched by loop and tool name, first come first served.
@@ -216,11 +228,14 @@ export const register: Register = (on, options) => {
     const u = r.usage
     if (u) {
       const sent = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
+      const stepPrice = costOf({ ...u, model: u.model ?? e.model ?? lastModel.get(stepLoop) }, sent)
       await update($, totals, t => ({
         in: t.in + sent,
         out: t.out + u.output_tokens,
         cached: t.cached + u.cache_read_input_tokens,
         steps: t.steps + 1,
+        cost: (t.cost ?? 0) + (stepPrice?.cost ?? 0),
+        saved: (t.saved ?? 0) + (stepPrice?.saved ?? 0),
       }))
       if (e.agentId === undefined) {
         const long = (u.ephemeral_1h_input_tokens ?? 0) > 0
@@ -291,6 +306,15 @@ export const register: Register = (on, options) => {
     }
   }).catch(($, e, next) => next(e))
 
+  // The mouse wheel (or the arrow keys while the pane has focus) scrolls the feed.
+  // The pane draws its own window of calls, newest first, so a move down shows
+  // older calls; the engine's own window is left where it is.
+  on('ui.scroll', { requestId: PANE }, async ($, e) => {
+    const total = (await read($, calls)).length
+    await update($, scroll, o => Math.min(Math.max(0, total - 1), Math.max(0, o + e.by)))
+    return {}
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const list = await read($, calls)
@@ -299,6 +323,10 @@ export const register: Register = (on, options) => {
     const isWarming = await read($, warming)
     const isCompacting = await read($, compacting)
     const isPicking = await read($, picking)
+    const showTot = await read($, totalsShown)
+    const showAll = (await read($, targetsShown)) ?? options.showTargets !== false
+    const openIds = await read($, opened)
+    const showTarget = (a: Activity) => !!a.target && (showAll || openIds.includes(a.id))
     const mine = await read($, ctx)
     // Prefer the engine's own reading of the main loop; fall back to what turn.step saw.
     let eng: Awaited<ReturnType<typeof $.agent.list>>[number] | undefined
@@ -324,7 +352,8 @@ export const register: Register = (on, options) => {
     const clockNow = await $.clock.now()
     const room = Math.max(1, e.viewport?.rows ?? 30) // the list box clips what doesn't fit
     const win = eng?.contextWindowSize ? eng.contextWindowSize : num(options.contextWindow, 200_000, 1000, 100_000_000)
-    const cols = e.viewport?.columns ?? 80
+    // The pane's own width; viewport.columns is the whole conversation's.
+    const cols = e.props?.bodyColumns ?? e.viewport?.columns ?? 80
     const width = Math.max(8, Math.min(Math.round(num(options.barWidth, 30, 10, 60)), cols - 24))
     const warnAt = num(options.compactAtPercent, 90, 1, 100) / 100
     const color = typeof options.meterColor === 'string' && options.meterColor ? options.meterColor : '#F7931A'
@@ -356,6 +385,17 @@ export const register: Register = (on, options) => {
     const costColor = opt(options.costColor, 'green')
     const savedIcon = opt(options.savingsIcon, '💵')
     const savedColor = opt(options.savingsColor, 'gray')
+    const warmIcon = opt(options.warmIcon, '🌡')
+    const coolIcon = opt(options.coolingIcon, '🧊')
+    // Status marks; an emoji takes the column's two cells.
+    const marks: Record<Activity['status'], string> = {
+      ...MARK,
+      ok: opt(options.okIcon, '⚡'),
+      error: opt(options.errorIcon, '💥'),
+    }
+    // The token totals line; blank leaves it dim, as it was.
+    const totLabelColor = opt(options.totalsLabelColor, '') || undefined
+    const totValueColor = opt(options.totalsValueColor, '') || undefined
     const modelIcon = (id: string) => icons[familyOf(id) ?? ''] ?? otherIcon
     const pct = Math.min(1, c.tokens / win)
     const filled = Math.round(pct * width)
@@ -377,7 +417,7 @@ export const register: Register = (on, options) => {
     const failed = list.filter(c => c.status === 'error' || c.status === 'denied').length
     // Whether the rows overflow the list box, estimated from each row's height: its
     // token column, its wrapped tool + target text, and the separator above it. The
-    // scroll and Clear buttons appear only then (or once scrolled, to scroll back).
+    // scroll buttons appear only then (or once scrolled, to scroll back).
     const paneRows = e.viewport?.rows ? Math.max(8, e.viewport.rows - 6) : 24
     // The model picker, opened by clicking the model name. It offers the engine's
     // own list when /config has a model row with choices, else the /model aliases.
@@ -402,18 +442,30 @@ export const register: Register = (on, options) => {
     // Mark the exact choice when it's one of the rows; otherwise fall back to the
     // family of the model that last answered (its id carries no [1m] or opusplan).
     const currentChoice = chosen && modelChoices.some(o => o.value === chosen) ? chosen : familyOf(modelName)
-    const headerRows = 2 + (isPicking ? modelChoices.length : 0) // info bar, token totals, picker rows
+    // The top bar's width with its labels: counts, model (emoji is 2 wide, plus ▾),
+    // and the targets toggle, one space between items. Too wide for the pane, the
+    // calls/run/fail labels drop and | separates the bare counts instead.
+    const barLen =
+      `${list.length} calls ${running} run ${failed} fail`.length +
+      (modelName !== '' ? 3 + 3 + modelLabel(modelName).length + 2 : 0)
+    const tight = barLen > cols
+    // The meter line with its Context label; too wide for the pane, the label drops.
+    const meterTight = `Context ${'█'.repeat(width)} ${Math.round(pct * 100)}% ${n(c.tokens)}/${n(win)}`.length > cols
+    // The token totals pieces, wrapped as the pane fits them.
+    const totRows = showTot ? 3 : 0
+    // Info bar, token totals, picker rows. The scroll row isn't counted: it appears
+    // only when the rows overflow without it.
+    const headerRows = 1 + totRows + (isPicking ? modelChoices.length + 7 : 0) // + two rules, Show Totals, Show Commands, Save Log, Clear Logs and a blank line
     const footerRows = 1 + (heavy ? 1 : 0) + 1 // meter, compact notice, status line
     const listRows = Math.max(1, paneRows - headerRows - footerRows)
-    const textCols = Math.max(10, cols - TOK_W - 1 - DUR_W - CLOCK_W - 4)
+    const textCols = Math.max(10, cols - TOK_W - 5)
     let used = 0
     for (let i = list.length - 1; i >= 0 && used <= listRows; i--) {
       const a = list[i]!
-      const tokLines = a.tokens ? 2 + (a.model ? 1 : 0) + ((a.tokens.saved ?? 0) > 0 ? 1 : 0) : 1
-      const textLines = Math.max(1, Math.ceil((a.tool.length + (a.target ? a.target.length + 1 : 0)) / textCols))
+      const tokLines = (a.tokens ? 2 + ((a.tokens.saved ?? 0) > 0 ? 1 : 0) : 0) + (a.model ? 1 : 0) + 1 // + duration/time
+      const textLines = Math.max(1, Math.ceil((a.tool.length + (showTarget(a) ? a.target.length + 1 : 0)) / textCols))
       used += Math.max(tokLines, textLines) + (i < list.length - 1 ? 1 : 0)
     }
-    const showNav = used > listRows || off > 0
     // Sends a tiny tool-less request over the session's own transcript so the prompt
     // cache is read (and rewritten if it lapsed), then restarts the meter's idle clock.
     const warm = async () => {
@@ -453,9 +505,24 @@ export const register: Register = (on, options) => {
     // compaction /compact runs. The engine refuses it while a turn is running.
     const runCompact = async () => {
       if (await read($, compacting)) return
+      // Offer focus instructions for the summary, as `/compact <focus>` takes. The first
+      // choice compacts with none, so Enter skips it; Esc cancels the compaction.
+      let instructions: string | undefined
+      if (options.askCompactFocus !== false) {
+        let answer: string
+        try {
+          answer = await $.ui.ask('Compact the conversation: anything the summary should focus on?', {
+            header: 'Compact',
+            options: [COMPACT_NOW, COMPACT_TASK],
+          })
+        } catch {
+          return // dismissed: leave the conversation as it is
+        }
+        instructions = answer === COMPACT_NOW ? undefined : answer === COMPACT_TASK ? TASK_FOCUS : answer.trim() || undefined
+      }
       await update($, compacting, () => true)
       try {
-        const r = await $.session.compact()
+        const r = await $.session.compact(instructions ? { instructions } : undefined)
         const after = (r as { tokensAfter?: number }).tokensAfter
         $.ui.toast(r.skip ? `Compact skipped: ${r.skip}` : `Compacted${after !== undefined ? ` to ~${n(after)}` : ''}`)
       } catch (err) {
@@ -473,25 +540,72 @@ export const register: Register = (on, options) => {
         $.ui.toast(`Couldn't switch model: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
+    // Writes the feed, oldest first, with the session totals to a text file in the
+    // logFolder setting (default: a claude-activity-logs folder in the home folder,
+    // never the session's own folder).
+    const saveLog = async () => {
+      try {
+        const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+        const folder = opt(options.logFolder, '') || (home ? `${home}/claude-activity-logs` : '')
+        if (!folder) {
+          $.ui.toast('Save Log: set the logFolder setting first')
+          return
+        }
+        const d = new Date(clockNow)
+        const p2 = (x: number) => String(x).padStart(2, '0')
+        const stamp = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`
+        const file = `${folder.replace(/[\\/]+$/, '')}/activity-${stamp}_${clock(clockNow).replace(/:/g, '')}.log`
+        const status: Record<Activity['status'], string> = { running: 'RUN ', ok: 'OK  ', error: 'FAIL', denied: 'DENY' }
+        const lines = [
+          `Activity log saved ${stamp} ${clock(clockNow)}`,
+          `Session: ${await $.session.cwd()}`,
+          `Responses: ${tot.steps}  Tokens: ${n(tot.in)}  Cached: ${n(tot.cached)}  Written: ${n(tot.out)}`,
+          `Session Totals: spent ${money(tot.cost ?? 0)} | cache saved ${money(tot.saved ?? 0)} (estimates at list prices)`,
+          '',
+          'Time      Status  Took    Tokens in/out      Cost     Saved    Model  Tool  Target',
+          ...list.map(a =>
+            [
+              clock(a.startedAt),
+              status[a.status],
+              took(a.ms).padEnd(6),
+              (a.tokens ? `${n(a.tokens.in)}/${n(a.tokens.out)}${a.tokens.shared > 1 ? `÷${a.tokens.shared}` : ''}` : '').padEnd(17),
+              (a.tokens?.cost !== undefined ? money(a.tokens.cost) : '').padEnd(7),
+              ((a.tokens?.saved ?? 0) > 0 ? money(a.tokens!.saved!) : '').padEnd(7),
+              a.model ? modelLabel(a.model) || a.model : '-',
+              a.tool,
+              a.target,
+            ].join('  '),
+          ),
+          '',
+        ]
+        await $.fs.write(file, lines.join(String.fromCharCode(10)))
+        $.ui.toast(`Saved ${list.length} calls to ${file}`)
+      } catch (err) {
+        $.ui.toast(`Couldn't save the log: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
     const clear = () => {
       void update($, scroll, () => 0)
       void update($, calls, () => [])
-      void update($, totals, () => ({ in: 0, out: 0, cached: 0, steps: 0 }))
+      void update($, opened, () => [])
+      void update($, totals, () => ({ in: 0, out: 0, cached: 0, steps: 0, cost: 0, saved: 0 }))
     }
 
     return (
       <Box flexDirection="column" height={e.viewport?.rows ? Math.max(8, e.viewport.rows - 6) : undefined}>
        <Box flexDirection="column" flexShrink={0}>
         <Box flexDirection="row" gap={1}>
-          <Text bold color={callsColor}>{list.length} calls</Text>
-          <Text color={runColor}>{running} run</Text>
-          <Text color={failed ? failColor : undefined} dimColor={!failed}>{failed} fail</Text>
+          <Text bold color={callsColor}>{list.length}{tight ? '' : ' calls'}</Text>
+          {tight && <Text color={sepColor}>|</Text>}
+          <Text color={runColor}>{running}{tight ? '' : ' run'}</Text>
+          {tight && <Text color={sepColor}>|</Text>}
+          <Text color={failed ? failColor : undefined} dimColor={!failed}>{failed}{tight ? '' : ' fail'}</Text>
           {modelName !== '' && <Text color={sepColor}>|</Text>}
           {modelName !== '' && (
             <Button key="model-name" plain onPress={() => void update($, picking, p => !p)}>
               <Text>{modelIcon(modelName)} </Text>
               <Text color={modelColor}>{modelLabel(modelName)}</Text>
-              <Text dimColor>{isPicking ? ' ▴' : ' ▾'}</Text>
+              <Text dimColor> ≡</Text>
             </Button>
           )}
         </Box>
@@ -507,19 +621,48 @@ export const register: Register = (on, options) => {
                 </Button>
               )
             })}
+            {/* View options, below the models and set apart by a rule. */}
+            <Text color={sepColor}>{'─'.repeat(Math.max(4, Math.min(24, cols - 2)))}</Text>
+            <Button key="totals-toggle" plain onPress={() => void update($, totalsShown, v => !v)}>
+              <Text>{showTot ? '◉' : '○'} Show Totals</Text>
+            </Button>
+            <Button
+              key="targets-toggle"
+              plain
+              onPress={() => {
+                void update($, targetsShown, () => !showAll)
+                void update($, opened, () => [])
+              }}
+            >
+              <Text>{showAll ? '◉' : '○'} Show Commands</Text>
+            </Button>
+            <Text color={sepColor}>{'─'.repeat(Math.max(4, Math.min(24, cols - 2)))}</Text>
+            <Button key="save-log" plain onPress={() => void saveLog()}>
+              <Text>💾 Save Log</Text>
+            </Button>
+            <Button key="clear" plain onPress={clear}>
+              <Text>✕ Clear Logs</Text>
+            </Button>
+            <Text> </Text>
           </Box>
         )}
-        {showNav && (
-          <Box flexDirection="row" gap={1}>
-            <Button onPress={() => void update($, scroll, o => Math.max(0, o - PAGE))}>▲</Button>
-            <Button onPress={() => void update($, scroll, o => Math.min(Math.max(0, list.length - 1), o + PAGE))}>▼</Button>
-            {off > 0 && <Text dimColor>+{off} newer</Text>}
-            <Button onPress={clear}>Clear</Button>
-          </Box>
-        )}
-        <Text dimColor>
-          Tokens over {tot.steps} responses: {n(tot.in)} sent ({n(tot.cached)} cached) · {n(tot.out)} written
+        {showTot && (<Box flexDirection="column">
+        {/* Token totals, one line each; dollars in parentheses. */}
+        <Text wrap="truncate-end">
+          <Text color={totLabelColor} dimColor={!totLabelColor}>Tokens: </Text>
+          <Text color={totValueColor} dimColor={!totValueColor}>{n(tot.in)}</Text>
+          <Text color={costColor}> ({money(tot.cost ?? 0)})</Text>
         </Text>
+        <Text wrap="truncate-end">
+          <Text color={totLabelColor} dimColor={!totLabelColor}>Cached: </Text>
+          <Text color={totValueColor} dimColor={!totValueColor}>{n(tot.cached)}</Text>
+          <Text color={savedColor}> ({money(tot.saved ?? 0)})</Text>
+        </Text>
+        <Text wrap="truncate-end">
+          <Text color={totLabelColor} dimColor={!totLabelColor}>Written: </Text>
+          <Text color={totValueColor} dimColor={!totValueColor}>{n(tot.out)}</Text>
+        </Text>
+        </Box>)}
        </Box>
        <Box flexDirection="column" flexGrow={1} flexShrink={1} minHeight={0} overflow="hidden">
         {list.length === 0 && <Text dimColor>No tool calls yet.</Text>}
@@ -532,10 +675,12 @@ export const register: Register = (on, options) => {
             {i > 0 && <Text color={rowSepColor} wrap="truncate-end">{'─'.repeat(Math.max(1, cols))}</Text>}
             <Box flexDirection="row" gap={1} flexShrink={0}>
               <Box width={TOK_W} flexShrink={0} flexDirection="column">
-                <Text color={outColor} wrap="truncate-end">{c.tokens ? `↑${n(c.tokens.in)}` : ''}</Text>
-                <Text color={inColor} wrap="truncate-end">
-                  {c.tokens ? `↓${n(c.tokens.out)}${c.tokens.shared > 1 ? `÷${c.tokens.shared}` : ''}` : ''}
-                </Text>
+                {c.tokens && <Text color={outColor} wrap="truncate-end">↑{n(c.tokens.in)}</Text>}
+                {c.tokens && (
+                  <Text color={inColor} wrap="truncate-end">
+                    ↓{n(c.tokens.out)}{c.tokens.shared > 1 ? `÷${c.tokens.shared}` : ''}
+                  </Text>
+                )}
                 {c.model && (
                   <Text wrap="truncate-end">
                     {modelIcon(c.model)}
@@ -548,21 +693,30 @@ export const register: Register = (on, options) => {
                     <Text color={savedColor}> {money(c.tokens!.saved!)}</Text>
                   </Text>
                 )}
+                <Text dimColor wrap="truncate-end">{took(c.ms).padEnd(DUR_W)} {clock(c.startedAt)}</Text>
               </Box>
-              <Box width={1} flexShrink={0}>
-                <Text color={COLOR[c.status]}>{MARK[c.status]}</Text>
+              <Box width={2} flexShrink={0}>
+                <Text color={COLOR[c.status]}>{marks[c.status]}</Text>
               </Box>
               <Box flexGrow={1} flexShrink={1}>
-                <Text wrap="wrap">
-                  <Text bold>{c.tool}</Text>
-                  <Text dimColor>{c.target ? ` ${c.target}` : ''}</Text>
-                </Text>
-              </Box>
-              <Box width={DUR_W} flexShrink={0} justifyContent="flex-end">
-                <Text dimColor wrap="truncate-end">{took(c.ms)}</Text>
-              </Box>
-              <Box width={CLOCK_W} flexShrink={0}>
-                <Text dimColor>{clock(c.startedAt)}</Text>
+                {showAll || !c.target ? (
+                  <Text wrap="wrap">
+                    <Text bold>{c.tool}</Text>
+                    <Text dimColor>{c.target ? ` ${c.target}` : ''}</Text>
+                  </Text>
+                ) : (
+                  // Targets hidden: click the tool name to open or close this call's target.
+                  <Button
+                    key={`target-${c.id}`}
+                    plain
+                    onPress={() => void update($, opened, ids => (ids.includes(c.id) ? ids.filter(x => x !== c.id) : [...ids, c.id]))}
+                  >
+                    <Text wrap="wrap">
+                      <Text bold>{c.tool}</Text>
+                      <Text dimColor>{openIds.includes(c.id) ? ` ${c.target}` : ' ›'}</Text>
+                    </Text>
+                  </Button>
+                )}
               </Box>
             </Box>
             </Box>
@@ -570,7 +724,7 @@ export const register: Register = (on, options) => {
        </Box>
         <Box flexDirection="column" flexShrink={0}>
           <Box flexDirection="row" gap={1}>
-            <Text bold color={labelColor}>Context</Text>
+            {!meterTight && <Text bold color={labelColor}>Context</Text>}
             {heavy ? (
               <Button key="compact-bar" plain onPress={() => void runCompact()}>
                 <Text color={barColor}>{'█'.repeat(filled)}</Text>
@@ -583,7 +737,7 @@ export const register: Register = (on, options) => {
               </Text>
             )}
             <Text>{Math.round(pct * 100)}%</Text>
-            <Text dimColor>{n(c.tokens)}/{n(win)} {fromEngine ? 'engine' : 'est'}</Text>
+            <Text dimColor>{n(c.tokens)}/{n(win)}</Text>
           </Box>
           {heavy && (
             <Text color={barColor} wrap="truncate-end">
@@ -598,23 +752,23 @@ export const register: Register = (on, options) => {
                 <Text color="red" wrap="truncate-end">⚠ Near limit · idle {span(idleMs)}</Text>
               ) : expired ? (
                 <Box flexDirection="row" gap={1}>
-                  {isWarming ? <Text color="yellow">…</Text> : <Button onPress={() => void warm()}>↻</Button>}
+                  {isWarming ? <Text color="yellow">…</Text> : <Button plain onPress={() => void warm()}>↻</Button>}
                   <Text color="yellow" wrap="truncate-end">
                     {isWarming ? 'Warming…' : `Expired · next message reloads ~${n(c.tokens)} · idle ${span(idleMs)} · ↻ reloads now`}
                   </Text>
                 </Box>
               ) : cooling ? (
                 <Box flexDirection="row" gap={1}>
-                  {isWarming ? <Text color={coolColor}>…</Text> : <Button onPress={() => void warm()}>↻</Button>}
+                  {isWarming ? <Text color={coolColor}>…</Text> : <Button plain onPress={() => void warm()}>↻</Button>}
                   <Text wrap="truncate-end">
-                    <Text color={coolColor}>{isWarming ? 'Warming…' : `✓ Cooling ${span(leftMs)} · `}</Text>
+                    <Text color={coolColor}>{isWarming ? 'Warming…' : `${coolIcon} Cooling ${span(leftMs)} · `}</Text>
                     {!isWarming && <Text color={idleLateColor}>idle {span(idleMs)}</Text>}
                     {!isWarming && <Text dimColor> · ↻ keeps it warm</Text>}
                   </Text>
                 </Box>
               ) : (
                 <Text wrap="truncate-end">
-                  <Text color={warmColor}>✓ Warm {span(leftMs)} · </Text>
+                  <Text color={warmColor}>{warmIcon}  Warm {span(leftMs)} · </Text>
                   <Text color={idleColor}>idle {span(idleMs)}</Text>
                 </Text>
               )}

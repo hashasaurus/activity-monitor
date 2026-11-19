@@ -45,10 +45,19 @@ export type Ctx = {
   compactedAt?: number
 }
 
-export type Totals = { in: number; out: number; cached: number; steps: number }
+export type Totals = {
+  in: number
+  out: number
+  cached: number
+  steps: number
+  /** Dollars spent at API list prices, summed over every priced response (an estimate). */
+  cost?: number
+  /** Dollars cache reads saved versus sending those tokens uncached (an estimate). */
+  saved?: number
+}
 
 declare module 'claude-code' {
   interface PluginState {
-    'activity-monitor': { calls: Shaped<Activity[]>; totals: Shaped<Totals>; ctx: Shaped<Ctx>; now: Shaped<number>; scroll: Shaped<number>; warming: Shaped<boolean>; compacting: Shaped<boolean>; picking: Shaped<boolean> }
+    'activity-monitor': { calls: Shaped<Activity[]>; totals: Shaped<Totals>; ctx: Shaped<Ctx>; now: Shaped<number>; scroll: Shaped<number>; warming: Shaped<boolean>; compacting: Shaped<boolean>; picking: Shaped<boolean>; targetsShown: Shaped<boolean | null>; totalsShown: Shaped<boolean>; opened: Shaped<string[]> }
   }
 }
